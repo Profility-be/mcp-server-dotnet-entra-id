@@ -49,7 +49,11 @@ This project demonstrates how to bridge the authentication gap between Claude AI
 
 ### Screenshots
 
-![Custom Login Page](../docs/screenshot-login.png)
+<p align="center">
+  <img src="docs/screenshot-login.png" alt="Custom Login Page" width="500"/>
+  <br>
+  <em>OAuth login flow with custom branding before Entra ID authentication</em>
+</p>
 *OAuth login flow with custom branding before Entra ID authentication*
 
 ### Tested Platforms
