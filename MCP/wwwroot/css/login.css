@@ -1,0 +1,319 @@
+/* Modern, clean login page styling for Profility MCP OAuth */
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+:root {
+    --primary-color: #0066cc;
+    --primary-hover: #0052a3;
+    --secondary-color: #6c757d;
+    --secondary-hover: #5a6268;
+    --success-color: #28a745;
+    --danger-color: #dc3545;
+    --warning-color: #ffc107;
+    --light-bg: #f8f9fa;
+    --white: #ffffff;
+    --text-dark: #212529;
+    --text-muted: #6c757d;
+    --border-color: #dee2e6;
+    --shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    --shadow-hover: 0 8px 15px rgba(0, 0, 0, 0.15);
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+}
+
+.login-container {
+    width: 100%;
+    max-width: 500px;
+    animation: fadeIn 0.5s ease-in;
+}
+
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+        transform: translateY(20px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.login-card {
+    background: var(--white);
+    border-radius: 16px;
+    box-shadow: var(--shadow);
+    padding: 40px;
+    transition: transform 0.3s ease, box-shadow 0.3s ease;
+}
+
+.login-card:hover {
+    box-shadow: var(--shadow-hover);
+}
+
+.logo-container {
+    text-align: center;
+    margin-bottom: 30px;
+}
+
+.logo-placeholder {
+    width: 100%;
+    max-width: 300px;
+    margin: 0 auto 20px;
+}
+
+.logo-placeholder svg {
+    width: 100%;
+    height: 100%;
+    filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.1));
+}
+
+.logo-placeholder img {
+    width: 100%;
+    height: auto;
+    max-width: 300px;
+    display: block;
+    margin: 0 auto;
+}
+
+.logo-container h1 {
+    font-size: 28px;
+    font-weight: 700;
+    color: var(--text-dark);
+    margin: 0;
+}
+
+.content-container h2,
+.error-container h2 {
+    font-size: 24px;
+    font-weight: 600;
+    color: var(--text-dark);
+    margin-bottom: 15px;
+    text-align: center;
+}
+
+.description {
+    color: var(--text-muted);
+    font-size: 16px;
+    line-height: 1.5;
+    margin-bottom: 20px;
+    text-align: center;
+}
+
+.question {
+    font-size: 18px;
+    color: var(--text-dark);
+    text-align: center;
+    margin-bottom: 30px;
+    line-height: 1.6;
+}
+
+.question strong {
+    color: var(--primary-color);
+}
+
+.info-box {
+    display: flex;
+    align-items: flex-start;
+    background: #e7f3ff;
+    border: 1px solid #b3d9ff;
+    border-radius: 8px;
+    padding: 16px;
+    margin-bottom: 30px;
+}
+
+.info-icon {
+    font-size: 24px;
+    margin-right: 12px;
+    flex-shrink: 0;
+}
+
+.info-text {
+    flex: 1;
+}
+
+.info-text strong {
+    display: block;
+    color: var(--text-dark);
+    margin-bottom: 4px;
+    font-size: 14px;
+}
+
+.info-text p {
+    color: var(--text-muted);
+    font-size: 13px;
+    margin: 0;
+    line-height: 1.4;
+}
+
+.button-container {
+    display: flex;
+    justify-content: center;
+    margin-bottom: 15px;
+}
+
+.btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 14px 32px;
+    font-size: 16px;
+    font-weight: 600;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    text-decoration: none;
+    width: 100%;
+    max-width: 350px;
+    font-family: inherit;
+}
+
+.btn-primary {
+    background: var(--primary-color);
+    color: var(--white);
+}
+
+.btn-primary:hover {
+    background: var(--primary-hover);
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0, 102, 204, 0.3);
+}
+
+.btn-primary:active {
+    transform: translateY(0);
+}
+
+.btn-secondary {
+    background: transparent;
+    color: var(--secondary-color);
+    border: 2px solid var(--border-color);
+}
+
+.btn-secondary:hover {
+    background: var(--light-bg);
+    border-color: var(--secondary-color);
+}
+
+.btn-icon {
+    margin-right: 8px;
+    font-size: 18px;
+}
+
+.login-form,
+.cancel-form {
+    margin: 0;
+}
+
+.footer-text {
+    margin-top: 25px;
+    padding-top: 20px;
+    border-top: 1px solid var(--border-color);
+    text-align: center;
+}
+
+.footer-text p {
+    font-size: 13px;
+    color: var(--text-muted);
+    line-height: 1.5;
+    margin: 0;
+}
+
+/* Error state */
+.error-container {
+    text-align: center;
+}
+
+.error-icon {
+    font-size: 64px;
+    margin-bottom: 20px;
+    animation: shake 0.5s ease-in-out;
+}
+
+@keyframes shake {
+    0%, 100% { transform: translateX(0); }
+    25% { transform: translateX(-10px); }
+    75% { transform: translateX(10px); }
+}
+
+.error-message {
+    color: var(--danger-color);
+    font-size: 16px;
+    margin-bottom: 30px;
+    padding: 15px;
+    background: #f8d7da;
+    border: 1px solid #f5c6cb;
+    border-radius: 8px;
+}
+
+/* Responsive design */
+@media (max-width: 576px) {
+    .login-card {
+        padding: 30px 20px;
+    }
+
+    .logo-container h1 {
+        font-size: 24px;
+    }
+
+    .content-container h2,
+    .error-container h2 {
+        font-size: 20px;
+    }
+
+    .question {
+        font-size: 16px;
+    }
+
+    .btn {
+        padding: 12px 24px;
+        font-size: 15px;
+    }
+}
+
+/* Loading state (optional) */
+.btn.loading {
+    position: relative;
+    color: transparent;
+    pointer-events: none;
+}
+
+.btn.loading::after {
+    content: "";
+    position: absolute;
+    width: 20px;
+    height: 20px;
+    top: 50%;
+    left: 50%;
+    margin-left: -10px;
+    margin-top: -10px;
+    border: 2px solid transparent;
+    border-top-color: currentColor;
+    border-radius: 50%;
+    animation: spin 0.6s linear infinite;
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
+/* Focus styles for accessibility */
+.btn:focus {
+    outline: 3px solid rgba(0, 102, 204, 0.3);
+    outline-offset: 2px;
+}
+
+.btn:focus:not(:focus-visible) {
+    outline: none;
+}

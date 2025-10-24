@@ -1,0 +1,94 @@
+@model MCP.Models.LoginPageModel
+@{
+    Layout = null;
+}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>@Model.ProductName - Login</title>
+    <link rel="stylesheet" href="~/css/login.css">
+    <style>
+        /* Dynamic branding colors */
+        .logo-placeholder circle,
+        .btn-primary {
+            fill: @Model.PrimaryColor;
+            background-color: @Model.PrimaryColor;
+        }
+        .btn-primary:hover {
+            background-color: @Model.PrimaryHoverColor;
+        }
+    </style>
+</head>
+<body>
+    <div class="login-container">
+        <div class="login-card">
+            <div class="logo-container">
+                <div class="logo-placeholder">
+                    <!-- Custom logo image -->
+                    <img src="~/css/Login banner.png" alt="@Model.ProductName Logo" style="width: 100%; height: auto; display: block;" />
+                </div>
+                <h1>@Model.ProductName</h1>
+            </div>
+
+            @if (Model.IsExpired)
+            {
+                <div class="error-container">
+                    <div class="error-icon">⚠️</div>
+                    <h2>Session Expired</h2>
+                    <p class="error-message">@Model.ErrorMessage</p>
+                    <div class="button-container">
+                        <button type="button" class="btn btn-secondary" onclick="window.close()">Close</button>
+                    </div>
+                </div>
+            }
+            else
+            {
+                <div class="content-container">
+                    <h2>Authentication Required</h2>
+                    <p class="description">
+                        Claude AI wants to access your @Model.ProductName.
+                    </p>
+                    <p class="question">
+                        Do you want to sign in with your <strong>Microsoft account</strong>?
+                    </p>
+
+                    <form method="post" action="/Login/Continue" class="login-form">
+                        <input type="hidden" name="token" value="@Model.LoginToken" />
+                        <div class="button-container">
+                            <button type="submit" class="btn btn-primary">
+                                <span class="btn-icon">→</span>
+                                Continue to Sign In
+                            </button>
+                        </div>
+                    </form>
+
+                    <form method="post" action="/Login/Cancel" class="cancel-form">
+                        <input type="hidden" name="token" value="@Model.LoginToken" />
+                        <div class="button-container">
+                            <button type="submit" class="btn btn-secondary">
+                                Cancel
+                            </button>
+                        </div>
+                    </form>
+
+                    <div class="footer-text">
+                        <p style="margin-bottom: 0.5rem;">By continuing, you authorize Claude AI to access your @Model.ProductName tools and data.</p>
+                        <p style="font-size: 0.85em; color: #6c757d; margin: 0;">
+                            🔒 <strong>Secure Connection:</strong> You will be redirected to the Microsoft login page to sign in securely.
+                        </p>
+                    </div>
+                </div>
+            }
+            
+            <!-- Subtle Profility branding footer -->
+            <div style="margin-top: 2rem; padding-top: 1.5rem; border-top: 1px solid rgba(0,0,0,0.08); text-align: center;">
+                <p style="color: #6c757d; font-size: 0.85em; margin: 0;">
+                    Powered by <a href="https://profility.be?utm_source=mcp-oauth-proxy&utm_medium=login-page&utm_campaign=powered-by" target="_blank" rel="noopener" style="color: #6B46C1; text-decoration: none; font-weight: 500; transition: color 0.2s;">Profility</a>
+                </p>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
