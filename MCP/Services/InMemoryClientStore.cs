@@ -1,11 +1,14 @@
-using Microsoft.Extensions.Caching.Memory;
 using MCP.Models;
+using System.Collections.Concurrent;
+using System.Security.Cryptography;
+using System.Text;
 
 namespace MCP.Services;
 
 /// <summary>
-/// Manages fake dynamic client registration for Claude.
-/// Maps proxy client IDs to the real Entra ID app registration.
+/// Manages dynamic client registration for Claude.
+/// Uses deterministic client IDs based on registration parameters.
+/// Same parameters = same client ID (persistent across restarts).
 /// </summary>
 public interface IClientStore
 {
@@ -15,49 +18,49 @@ public interface IClientStore
 
 public class InMemoryClientStore : IClientStore
 {
-    private readonly IMemoryCache _cache;
-    private readonly IConfiguration _configuration;
-    private const int CLIENT_EXPIRATION_HOURS = 24;
-
-    public InMemoryClientStore(IMemoryCache cache, IConfiguration configuration)
-    {
-        _cache = cache;
-        _configuration = configuration;
-    }
+    private static readonly ConcurrentDictionary<string, ClientMapping> _clients = new();
 
     public Task<string> RegisterClient(string clientName, List<string> redirectUris, string? requestedScopes)
     {
-        // Generate a new proxy client ID
-        var proxyClientId = Guid.NewGuid().ToString();
+        // Generate deterministic client ID based on registration parameters
+        var proxyClientId = GenerateDeterministicClientId(clientName, redirectUris, requestedScopes);
 
-        // Get the real Entra ID app registration details from configuration
-        var entraClientId = _configuration["AzureAd:ClientId"] 
-            ?? throw new InvalidOperationException("AzureAd:ClientId not configured");
-        var entraTenantId = _configuration["AzureAd:TenantId"] 
-            ?? throw new InvalidOperationException("AzureAd:TenantId not configured");
-
+        // Store or update mapping (idempotent)
         var mapping = new ClientMapping
         {
             ProxyClientId = proxyClientId,
-            EntraClientId = entraClientId,
-            EntaTenantId = entraTenantId,
             RedirectUris = redirectUris,
             RequestedScopes = requestedScopes,
             ClientName = clientName,
             CreatedAt = DateTime.UtcNow
         };
 
-        // Store in cache
-        var cacheKey = $"client:{proxyClientId}";
-        _cache.Set(cacheKey, mapping, TimeSpan.FromHours(CLIENT_EXPIRATION_HOURS));
-
+        _clients[proxyClientId] = mapping;
         return Task.FromResult(proxyClientId);
     }
 
     public Task<ClientMapping?> GetClientMapping(string proxyClientId)
     {
-        var cacheKey = $"client:{proxyClientId}";
-        _cache.TryGetValue<ClientMapping>(cacheKey, out var mapping);
+        _clients.TryGetValue(proxyClientId, out var mapping);
         return Task.FromResult(mapping);
+    }
+
+    private static string GenerateDeterministicClientId(string clientName, List<string> redirectUris, string? scopes)
+    {
+        // Create stable hash input (sorted for consistency)
+        var sortedRedirects = string.Join("|", redirectUris.OrderBy(x => x));
+        var input = $"{clientName}|{sortedRedirects}|{scopes ?? ""}";
+        
+        // Generate SHA-256 hash
+        using var sha256 = SHA256.Create();
+        var hashBytes = sha256.ComputeHash(Encoding.UTF8.GetBytes(input));
+        
+        // Convert to base64url (RFC 7515) and take first 32 chars for readability
+        var base64 = Convert.ToBase64String(hashBytes)
+            .Replace('+', '-')
+            .Replace('/', '_')
+            .TrimEnd('=');
+        
+        return base64[..32]; // 32 characters = 192 bits of entropy
     }
 }

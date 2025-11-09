@@ -26,21 +26,18 @@ This project leverages the **official Model Context Protocol C# SDK** from Anthr
 
 ⚠️ **This implementation uses in-memory storage for simplicity**:
 
-- `IMemoryCache` for PKCE state
-- `IMemoryCache` for token mappings
-- `IMemoryCache` for client registrations
-- `IMemoryCache` for login tokens
+- `ConcurrentDictionary` (static) for PKCE state, token mappings, client registrations and login tokens
 
-**This is NOT suitable for production** because:
+**Why this is only for development/demos**:
 - ❌ Data is lost on application restart
 - ❌ Does not work with multiple instances (web farms)
 - ❌ No persistence or audit trail
 - ❌ Limited scalability
 
 **For production, replace with**:
-- ✅ **Redis** (recommended) - Distributed cache, fast, scales horizontally
-- ✅ **SQL Server** - Persistent, supports transactions, audit trail
-- ✅ **Azure Table Storage** - Cost-effective, serverless, global distribution
+- ✅ **Redis** (recommended) - Distributed cache, fast, scales horizontally, supports TTL and atomic GET+DEL
+- ✅ **SQL Server** - Persistent, supports transactions and audit trail
+- ✅ **Azure Table Storage** - Cost-effective, serverless, globally distributed
 
 See [Persistent Token Storage](#persistent-token-storage-recommendations) below for details.
 
@@ -295,32 +292,12 @@ public static class PkceValidator
 
 ### Encrypted State Management
 
-The proxy uses ASP.NET Core Data Protection to encrypt state containing PKCE parameters:
+The proxy uses ASP.NET Core Data Protection to encrypt state containing PKCE parameters. The full implementation lives in `MCP/Services/PkceStateManager.cs` — it serializes the `PkceStateData`, protects it using IDataProtector and encodes the result as a URL-safe base64 string. See the source for encryption/decryption helpers and error handling.
 
+Source: `MCP/Services/PkceStateManager.cs`
 ```csharp
-public class PkceStateManager
-{
-    private readonly IDataProtector _protector;
-    
-    public PkceStateManager(IDataProtectionProvider provider)
-    {
-        _protector = provider.CreateProtector("OAuth.PKCE.State");
-    }
-    
-    public string CreateState(PkceStateData data)
-    {
-        var json = JsonSerializer.Serialize(data);
-        var encrypted = _protector.Protect(json);
-        
-        return Convert.ToBase64String(Encoding.UTF8.GetBytes(encrypted))
-            .Replace('+', '-')
-            .Replace('/', '_')
-            .TrimEnd('=');
-    }
-    
-    public PkceStateData? ReadState(string state)
-    {
-        try
+// See the source file for the full implementation
+```
         {
             var paddedState = state.Replace('-', '+').Replace('_', '/');
             paddedState = paddedState.PadRight(
@@ -361,7 +338,7 @@ The proxy uses the **Phantom Token Pattern** to separate external and internal t
                                    v
                           ┌───────────────────┐
                           │  Token Store      │
-                          │  (IMemoryCache)   │
+                          │  (In-memory store / ConcurrentDictionary)
                           │                   │
                           │  Mapping:         │
                           │  opaque → JWT     │
@@ -369,89 +346,35 @@ The proxy uses the **Phantom Token Pattern** to separate external and internal t
                           └───────────────────┘
 ```
 
-### Token Mapping Model
+### Token model (TokenData)
 
-```csharp
-public class TokenMapping
-{
-    public string OpaqueToken { get; set; } = default!;
-    public string ProxyJwtToken { get; set; } = default!;
-    public string EntraAccessToken { get; set; } = default!;
-    public string? EntraIdToken { get; set; }
-    public string? EntraRefreshToken { get; set; }
-    public string Subject { get; set; } = default!;
-    public string Resource { get; set; } = default!;
-    public string[] Scopes { get; set; } = Array.Empty<string>();
-    public DateTime CreatedAt { get; set; }
-    public DateTime ExpiresAt { get; set; }
-    
-    // User claims from ID token
-    public string? Name { get; set; }
-    public string? Email { get; set; }
-    public string? PreferredUsername { get; set; }
-    public string? ObjectId { get; set; }
-}
-```
+The project now uses a unified `TokenData` model that contains the Entra refresh token, user claims and PKCE state. This replaces older `TokenMapping` usage and consolidates authorization_code and refresh_token flows.
+
+Key fields:
+- Code (opaque proxy code / refresh token)
+- EntraRefreshToken
+- UserClaims (name, email, oid, upn, etc.)
+- PkceState (original PKCE details)
+- CreatedAt / ExpiresAt
 
 ### Token Store Interface
 
 ```csharp
 public interface ITokenStore
 {
-    Task<string> StoreTokenAsync(TokenMapping mapping);
-    Task<TokenMapping?> GetMappingAsync(string opaqueToken);
-    Task<bool> RevokeTokenAsync(string opaqueToken);
-    Task CleanupExpiredTokensAsync();
+    Task StoreCodeData(TokenData codeData);
+    Task<TokenData?> GetAndConsumeCode(string code);
 }
 ```
 
-### In-Memory Implementation
+### In-memory Implementation (development)
+
+For the reference implementation we use a static `ConcurrentDictionary<string, TokenData>` to store tokens in-memory. This keeps the API simple and provides atomic GET+REMOVE semantics for single-use tokens. **For production you should replace this with a persistent store (Redis/SQL).**
+
+See the full implementation in `MCP/Services/InMemoryTokenStore.cs` for details and TTL handling.
 
 ```csharp
-public class InMemoryTokenStore : ITokenStore
-{
-    private readonly IMemoryCache _cache;
-    private readonly ILogger<InMemoryTokenStore> _logger;
-    
-    public async Task<string> StoreTokenAsync(TokenMapping mapping)
-    {
-        mapping.OpaqueToken = GenerateOpaqueToken();
-        
-        var expiry = mapping.ExpiresAt - DateTime.UtcNow;
-        _cache.Set(
-            $"token:{mapping.OpaqueToken}", 
-            mapping, 
-            expiry);
-        
-        _logger.LogInformation(
-            "Stored token mapping for subject {Subject}, expires at {ExpiresAt}",
-            mapping.Subject, mapping.ExpiresAt);
-        
-        return mapping.OpaqueToken;
-    }
-    
-    public async Task<TokenMapping?> GetMappingAsync(string opaqueToken)
-    {
-        if (_cache.TryGetValue($"token:{opaqueToken}", out TokenMapping? mapping))
-        {
-            return mapping;
-        }
-        
-        _logger.LogWarning("Token not found: {Token}", opaqueToken);
-        return null;
-    }
-    
-    private static string GenerateOpaqueToken()
-    {
-        var bytes = new byte[32];  // 256 bits
-        RandomNumberGenerator.Fill(bytes);
-        
-        return Convert.ToBase64String(bytes)
-            .Replace('+', '-')
-            .Replace('/', '_')
-            .TrimEnd('=');
-    }
-}
+// See MCP/Services/InMemoryTokenStore.cs
 ```
 
 ---
@@ -558,8 +481,6 @@ public async Task<IActionResult> Authorize(...)
      │ 200 OK - MCP tools response                   │                        │
      │<─────────────────────┼────────────────────────┤                        │
 ```
-     │<───────────────────────────────┤                                 │
-```
 
 ### Login Token Model
 
@@ -570,7 +491,6 @@ public class LoginTokenData
 {
     public string EncryptedState { get; set; } = default!;
     public DateTime ExpiresAt { get; set; }
-    public bool IsUsed { get; set; }
 }
 ```
 
@@ -588,12 +508,10 @@ public class LoginTokenData
 ```csharp
 public async Task<LoginTokenData?> GetAsync(string token)
 {
-    if (_cache.TryGetValue($"login:{token}", out LoginTokenData? data))
-    {
-        _cache.Remove($"login:{token}");  // ← Delete immediately
-        return data;
-    }
-    return null;
+    // Implementation uses a ConcurrentDictionary with TryRemove to ensure single-use semantics
+    if (!_loginTokens.TryRemove(token, out var data)) { return null; }
+    if (data.ExpiresAt < DateTime.UtcNow) { return null; }
+    return data;
 }
 ```
 
@@ -707,18 +625,18 @@ builder.Services.AddDataProtection()
 ### Caching Strategy
 
 ```
-IMemoryCache:
-  - PKCE State: 10 min TTL
-  - Login Tokens: 5 min TTL
-  - Authorization Codes: 5 min TTL
-  - Access Tokens: 60 min TTL
-  - Client Registrations: 24 hour TTL
+In-memory (ConcurrentDictionary):
+    - PKCE State: 10 min TTL
+    - Login Tokens: 5 min TTL
+    - Authorization Codes: 5 min TTL
+    - Access Tokens: 60 min TTL
+    - Client Registrations: 24 hour TTL
 ```
 
 ### Scaling Options
 
 **Single Instance (current)**:
-- IMemoryCache
+- `ConcurrentDictionary` (static in-process store)
 - Fast (sub-millisecond)
 - No external dependencies
 
@@ -731,30 +649,41 @@ IMemoryCache:
 
 ## Persistent Token Storage Recommendations
 
+- ✅ Zero external dependencies
+- ✅ Simple to understand and debug
+- ✅ Fast (sub-millisecond lookups)
+- ✅ Good for development and demos
 ### Current Implementation (Development Only)
 
-The project currently uses `IMemoryCache` for all stateful data:
+The project currently uses a static `ConcurrentDictionary<string, TokenData>` for all stateful data (tokens, PKCE state, login tokens, client mappings). Example:
 
 ```csharp
 // Services/InMemoryTokenStore.cs
 public class InMemoryTokenStore : ITokenStore
 {
-    private readonly IMemoryCache _cache;
-    
-    public async Task<string> StoreTokenAsync(TokenMapping mapping)
+    private static readonly ConcurrentDictionary<string, TokenData> _tokens = new();
+
+    public Task StoreCodeData(TokenData codeData)
     {
-        mapping.OpaqueToken = GenerateOpaqueToken();
-        
-        var expiry = mapping.ExpiresAt - DateTime.UtcNow;
-        _cache.Set($"token:{mapping.OpaqueToken}", mapping, expiry);
-        
-        return mapping.OpaqueToken;
+        codeData.Code = GenerateOpaqueToken();
+        _tokens[codeData.Code] = codeData;
+        return Task.CompletedTask;
     }
-    // ... other methods
+
+    public Task<TokenData?> GetAndConsumeCode(string code)
+    {
+        if (!_tokens.TryRemove(code, out var tokenData)) { return Task.FromResult<TokenData?>(null); }
+        if (tokenData.CreatedAt.AddDays(TOKEN_EXPIRATION_DAYS) < DateTime.UtcNow) { return Task.FromResult<TokenData?>(null); }
+        return Task.FromResult<TokenData?>(tokenData);
+    }
 }
 ```
 
 **Why this was chosen for the reference implementation**:
+- ✅ Zero external dependencies
+- ✅ Simple to understand and debug
+- ✅ Fast (sub-millisecond lookups)
+- ✅ Good for development and demos
 - ✅ Zero external dependencies
 - ✅ Simple to understand and debug
 - ✅ Fast (sub-millisecond lookups)
@@ -849,8 +778,8 @@ CREATE TABLE TokenAuditLog (
 ```csharp
 public interface ITokenStore
 {
-    Task<string> StoreTokenAsync(TokenMapping mapping);
-    Task<TokenMapping?> GetMappingAsync(string opaqueToken);
+    Task StoreCodeData(TokenData codeData);
+    Task<TokenData?> GetAndConsumeCode(string code);
     Task<bool> RevokeTokenAsync(string opaqueToken);
     Task CleanupExpiredTokensAsync();
 }

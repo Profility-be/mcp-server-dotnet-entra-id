@@ -256,14 +256,14 @@ MCP/
 │   └── WellKnownController.cs      # Discovery endpoints
 ├── Services/
 │   ├── PkceStateManager.cs         # Encrypted state for PKCE flows
-│   ├── InMemoryTokenStore.cs       # Token mappings
-│   ├── InMemoryLoginTokenStore.cs  # Login page tokens
-│   ├── InMemoryClientStore.cs      # Client registrations
+│   ├── InMemoryTokenStore.cs       # Token and refresh-token mappings (single-source of truth)
+│   ├── InMemoryLoginTokenStore.cs  # Short-lived login page tokens
++│   ├── InMemoryClientStore.cs      # Deterministic client registrations for Claude (RFC 7591)
 │   ├── ProxyJwtTokenGenerator.cs   # JWT generation with correct claims
 │   └── BrandingProvider.cs         # Branding configuration provider
 ├── Models/
 │   ├── PkceStateData.cs            # PKCE state data
-│   ├── TokenMapping.cs             # Token mapping data
+│   ├── TokenData.cs                # Unified token model (authorization_code + refresh_token)
 │   ├── LoginTokenData.cs           # Login page data
 │   ├── ClientMapping.cs            # Client registration data
 │   └── LoginPageModel.cs           # Login page view model
@@ -395,10 +395,10 @@ For more troubleshooting, see logs at `Information` level.
 
 ### ⚠️ Current Limitations
 
-This reference implementation uses **in-memory caching** for simplicity:
-- **PKCE State** - Stored in `IMemoryCache`
-- **Token Mappings** - Stored in `IMemoryCache`
-- **Client Registrations** - Stored in `IMemoryCache`
+This reference implementation uses **in-memory storage** for simplicity:
+- **PKCE State** - Stored in a static `ConcurrentDictionary` (in-memory)
+- **Token Mappings** - Stored in a static `ConcurrentDictionary` (in-memory)
+- **Client Registrations** - Stored in a static `ConcurrentDictionary` (in-memory)
 
 **For production deployments**, you should replace these with:
 - ✅ **Redis** - Distributed cache for web farms (recommended)

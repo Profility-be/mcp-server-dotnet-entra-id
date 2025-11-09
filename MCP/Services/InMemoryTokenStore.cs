@@ -1,111 +1,46 @@
-using Microsoft.Extensions.Caching.Memory;
 using MCP.Models;
+using System.Collections.Concurrent;
 
 namespace MCP.Services;
 
 /// <summary>
-/// In-memory store for mapping proxy tokens to Entra ID tokens.
-/// Implements the Phantom Token Pattern.
+/// In-memory store for single-use codes.
+/// Both authorization_code and refresh_token flows use single-use codes.
+/// Uses static dictionary for long-lived tokens (90 days).
 /// </summary>
 public interface ITokenStore
 {
-    Task StoreTokenMapping(TokenMapping mapping);
-    Task<TokenMapping?> GetTokenMapping(string proxyAccessToken);
-    Task<TokenMapping?> GetTokenMappingByCode(string authorizationCode);
-    Task RemoveTokenMapping(string proxyAccessToken);
-    Task<bool> ValidateAndConsumeAuthorizationCode(string code);
-    Task StoreAuthorizationCode(string code, PkceStateData stateData, string entraAuthCode);
+    /// <summary>
+    /// Store code data (used for both initial auth and refresh flows)
+    /// </summary>
+    Task StoreCodeData(TokenData codeData);
+    
+    /// <summary>
+    /// Get and consume code data (single-use)
+    /// Returns null if code is invalid, expired, or already used
+    /// </summary>
+    Task<TokenData?> GetAndConsumeCode(string code);
 }
 
 public class InMemoryTokenStore : ITokenStore
 {
-    private readonly IMemoryCache _cache;
-    private const int TOKEN_EXPIRATION_HOURS = 1;
-    private const int AUTH_CODE_EXPIRATION_MINUTES = 5;
+    private static readonly ConcurrentDictionary<string, TokenData> _tokens = new();
+    private const int TOKEN_EXPIRATION_DAYS = 90;
 
-    public InMemoryTokenStore(IMemoryCache cache)
+    public Task StoreCodeData(TokenData codeData)
     {
-        _cache = cache;
+        codeData.CreatedAt = DateTime.UtcNow;
+        _tokens[codeData.Code] = codeData;
+        return Task.CompletedTask;
     }
 
-    public Task StoreTokenMapping(TokenMapping mapping)
+    public Task<TokenData?> GetAndConsumeCode(string code)
     {
-        var cacheKey = $"token:{mapping.ProxyAccessToken}";
-        var expiration = mapping.ExpiresAt - DateTime.UtcNow;
+        if (!_tokens.TryRemove(code, out var tokenData)) { return Task.FromResult<TokenData?>(null); }
         
-        if (expiration <= TimeSpan.Zero)
-        {
-            expiration = TimeSpan.FromHours(TOKEN_EXPIRATION_HOURS);
-        }
+        // Check expiration (90 days)
+        if (tokenData.CreatedAt.AddDays(TOKEN_EXPIRATION_DAYS) < DateTime.UtcNow) { return Task.FromResult<TokenData?>(null); }
 
-        _cache.Set(cacheKey, mapping, expiration);
-
-        // Also store by authorization code for token exchange lookup
-        var codeCacheKey = $"token_by_code:{mapping.AuthorizationCode}";
-        _cache.Set(codeCacheKey, mapping, TimeSpan.FromMinutes(AUTH_CODE_EXPIRATION_MINUTES));
-
-        return Task.CompletedTask;
+        return Task.FromResult<TokenData?>(tokenData);
     }
-
-    public Task<TokenMapping?> GetTokenMapping(string proxyAccessToken)
-    {
-        var cacheKey = $"token:{proxyAccessToken}";
-        _cache.TryGetValue<TokenMapping>(cacheKey, out var mapping);
-        return Task.FromResult(mapping);
-    }
-
-    public Task<TokenMapping?> GetTokenMappingByCode(string authorizationCode)
-    {
-        var cacheKey = $"token_by_code:{authorizationCode}";
-        _cache.TryGetValue<TokenMapping>(cacheKey, out var mapping);
-        return Task.FromResult(mapping);
-    }
-
-    public Task RemoveTokenMapping(string proxyAccessToken)
-    {
-        var cacheKey = $"token:{proxyAccessToken}";
-        _cache.Remove(cacheKey);
-        return Task.CompletedTask;
-    }
-
-    public Task<bool> ValidateAndConsumeAuthorizationCode(string code)
-    {
-        var cacheKey = $"auth_code:{code}";
-        
-        if (_cache.TryGetValue<bool>(cacheKey, out var exists))
-        {
-            // Code already used
-            return Task.FromResult(false);
-        }
-
-        // Mark code as used (store for 5 minutes to prevent replay)
-        _cache.Set(cacheKey, true, TimeSpan.FromMinutes(AUTH_CODE_EXPIRATION_MINUTES));
-        return Task.FromResult(true);
-    }
-
-    public Task StoreAuthorizationCode(string code, PkceStateData stateData, string entraAuthCode)
-    {
-        var cacheKey = $"auth_code_data:{code}";
-        var data = new AuthorizationCodeData
-        {
-            ProxyCode = code,
-            EntraAuthCode = entraAuthCode,
-            StateData = stateData,
-            CreatedAt = DateTime.UtcNow
-        };
-
-        _cache.Set(cacheKey, data, TimeSpan.FromMinutes(AUTH_CODE_EXPIRATION_MINUTES));
-        return Task.CompletedTask;
-    }
-}
-
-/// <summary>
-/// Internal class to store authorization code data
-/// </summary>
-internal class AuthorizationCodeData
-{
-    public required string ProxyCode { get; set; }
-    public required string EntraAuthCode { get; set; }
-    public required PkceStateData StateData { get; set; }
-    public DateTime CreatedAt { get; set; }
 }

@@ -1,78 +1,45 @@
-using Microsoft.Extensions.Caching.Memory;
 using MCP.Models;
+using System.Collections.Concurrent;
 
 namespace MCP.Services;
 
 /// <summary>
-/// Manages temporary login tokens for the custom login page flow.
+/// Manages temporary single-use login tokens for the custom login page flow.
+/// Uses static dictionary like InMemoryTokenStore.
 /// </summary>
 public interface ILoginTokenStore
 {
     Task<string> CreateLoginToken(string encryptedState);
-    Task<LoginTokenData?> GetLoginTokenData(string token);
-    Task MarkTokenAsUsed(string token);
-    Task RemoveLoginToken(string token);
+    Task<LoginTokenData?> GetAndConsumeLoginToken(string token);
 }
 
 public class InMemoryLoginTokenStore : ILoginTokenStore
 {
-    private readonly IMemoryCache _cache;
+    private static readonly ConcurrentDictionary<string, LoginTokenData> _loginTokens = new();
     private const int LOGIN_TOKEN_EXPIRATION_MINUTES = 10;
-
-    public InMemoryLoginTokenStore(IMemoryCache cache)
-    {
-        _cache = cache;
-    }
 
     public Task<string> CreateLoginToken(string encryptedState)
     {
-        var token = Guid.NewGuid().ToString("N"); // 32 character hex string
+        var token = Guid.NewGuid().ToString("N");
         
         var loginData = new LoginTokenData
         {
             Token = token,
             EncryptedState = encryptedState,
             CreatedAt = DateTime.UtcNow,
-            ExpiresAt = DateTime.UtcNow.AddMinutes(LOGIN_TOKEN_EXPIRATION_MINUTES),
-            IsUsed = false
+            ExpiresAt = DateTime.UtcNow.AddMinutes(LOGIN_TOKEN_EXPIRATION_MINUTES)
         };
 
-        var cacheKey = $"login_token:{token}";
-        _cache.Set(cacheKey, loginData, TimeSpan.FromMinutes(LOGIN_TOKEN_EXPIRATION_MINUTES));
-
+        _loginTokens[token] = loginData;
         return Task.FromResult(token);
     }
 
-    public Task<LoginTokenData?> GetLoginTokenData(string token)
+    public Task<LoginTokenData?> GetAndConsumeLoginToken(string token)
     {
-        var cacheKey = $"login_token:{token}";
-        _cache.TryGetValue<LoginTokenData>(cacheKey, out var data);
+        if (!_loginTokens.TryRemove(token, out var loginData)) { return Task.FromResult<LoginTokenData?>(null); }
+        
+        if (loginData.ExpiresAt < DateTime.UtcNow) { return Task.FromResult<LoginTokenData?>(null); }
 
-        // Check if expired
-        if (data != null && data.ExpiresAt < DateTime.UtcNow)
-        {
-            _cache.Remove(cacheKey);
-            return Task.FromResult<LoginTokenData?>(null);
-        }
-
-        return Task.FromResult(data);
-    }
-
-    public Task MarkTokenAsUsed(string token)
-    {
-        var cacheKey = $"login_token:{token}";
-        if (_cache.TryGetValue<LoginTokenData>(cacheKey, out var data) && data != null)
-        {
-            data.IsUsed = true;
-            _cache.Set(cacheKey, data, TimeSpan.FromMinutes(LOGIN_TOKEN_EXPIRATION_MINUTES));
-        }
-        return Task.CompletedTask;
-    }
-
-    public Task RemoveLoginToken(string token)
-    {
-        var cacheKey = $"login_token:{token}";
-        _cache.Remove(cacheKey);
-        return Task.CompletedTask;
+        return Task.FromResult<LoginTokenData?>(loginData);
     }
 }

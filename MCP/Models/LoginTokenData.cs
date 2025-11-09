@@ -25,9 +25,4 @@ public class LoginTokenData
     /// When this login token expires (default: 10 minutes)
     /// </summary>
     public DateTime ExpiresAt { get; set; } = DateTime.UtcNow.AddMinutes(10);
-
-    /// <summary>
-    /// Whether this token has been used (prevents replay attacks)
-    /// </summary>
-    public bool IsUsed { get; set; } = false;
 }
