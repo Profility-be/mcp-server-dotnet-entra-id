@@ -210,6 +210,108 @@ public class OAuthController : Controller
     }
 
     /// <summary>
+    /// User confirmed login - redirect to Entra ID
+    /// </summary>
+    [HttpPost("continue")]
+    public async Task<IActionResult> Continue([FromForm] string token)
+    {
+        _logger.LogInformation("User confirmed login");
+
+        try
+        {
+            // Validate the login token
+            var loginData = await _loginTokenStore.GetLoginTokenData(token);
+            if (loginData == null || loginData.IsUsed || loginData.ExpiresAt < DateTime.UtcNow)
+            {
+                _logger.LogWarning("Invalid or expired login token");
+                return BadRequest("Invalid or expired login token");
+            }
+
+            // Mark token as used
+            await _loginTokenStore.MarkTokenAsUsed(token);
+
+            // Decrypt the state to get PKCE data
+            var stateData = _stateManager.DecryptAndRetrieveState(loginData.EncryptedState);
+            if (stateData == null)
+            {
+                _logger.LogError("Failed to decrypt state data");
+                return BadRequest("Invalid state data");
+            }
+
+            // Build the Entra ID authorization URL
+            var tenantId = _configuration["AzureAd:TenantId"];
+            var clientId = _configuration["AzureAd:ClientId"];
+            var baseScope = _configuration["AzureAd:Scope"] ?? $"api://{clientId}/MCP.Access";
+            var fullScope = $"{baseScope} openid profile email";  // Add OpenID Connect scopes for ID token
+            var baseUrl = _configuration["MCP:ServerUrl"]?.TrimEnd('/');
+            var redirectUri = $"{baseUrl}/oauth/callback";
+
+            var entraAuthUrl = $"https://login.microsoftonline.com/{tenantId}/oauth2/v2.0/authorize" +
+                $"?client_id={Uri.EscapeDataString(clientId!)}" +
+                $"&response_type=code" +
+                $"&redirect_uri={Uri.EscapeDataString(redirectUri)}" +
+                $"&scope={Uri.EscapeDataString(fullScope)}" +
+                $"&state={Uri.EscapeDataString(loginData.EncryptedState)}" +
+                $"&code_challenge={Uri.EscapeDataString(stateData.ProxyCodeChallenge!)}" +  // Proxy's PKCE challenge for Entra ID
+                $"&code_challenge_method=S256" +  // PKCE method (SHA-256)
+                $"&prompt=select_account"; // Force account selection
+
+            _logger.LogInformation("Redirecting to Entra ID for authentication");
+
+            return Redirect(entraAuthUrl);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error during login continuation");
+            return StatusCode(500, "Er is een fout opgetreden. Probeer het later opnieuw.");
+        }
+    }
+
+    /// <summary>
+    /// User canceled the login
+    /// </summary>
+    [HttpPost("cancel")]
+    public async Task<IActionResult> Cancel([FromForm] string token)
+    {
+        _logger.LogInformation("User canceled login with token: {Token}", token);
+
+        try
+        {
+            // Validate the login token
+            var loginData = await _loginTokenStore.GetLoginTokenData(token);
+            if (loginData == null)
+            {
+                return BadRequest("Invalid login token");
+            }
+
+            // Mark token as used
+            await _loginTokenStore.MarkTokenAsUsed(token);
+
+            // Decrypt the state to get redirect URI
+            var stateData = _stateManager.DecryptAndRetrieveState(loginData.EncryptedState);
+            if (stateData == null)
+            {
+                return BadRequest("Invalid state data");
+            }
+
+            // Redirect back to Claude with error
+            var errorUrl = $"{stateData.RedirectUri}" +
+                $"?error=access_denied" +
+                $"&error_description={Uri.EscapeDataString("User canceled the login")}" +
+                $"&state={Uri.EscapeDataString(stateData.OriginalState)}";
+
+            _logger.LogInformation("Redirecting to error URL: {Url}", errorUrl);
+
+            return Redirect(errorUrl);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error during login cancellation");
+            return StatusCode(500, "Er is een fout opgetreden.");
+        }
+    }
+
+    /// <summary>
     /// OAuth 2.0 Callback Endpoint
     /// Entra ID redirects back here after user authentication.
     /// We exchange the Entra auth code for tokens, then redirect back to Claude.
@@ -256,8 +358,8 @@ public class OAuthController : Controller
             }
 
             // Exchange the authorization code for tokens with Entra ID
-            var tokenResponse = await ExchangeCodeForTokens(code, pkceState);
-            if (tokenResponse == null)
+            var entraIdToken = await ExchangeCodeForTokens(code, pkceState);
+            if (entraIdToken == null)
             {
                 _logger.LogError("Failed to exchange code for tokens with Entra ID");
                 var errorUrl = $"{pkceState.RedirectUri}?error=server_error&error_description=Token exchange failed&state={pkceState.OriginalState}";
@@ -271,9 +373,9 @@ public class OAuthController : Controller
             await _tokenStore.StoreAuthorizationCode(proxyAuthCode, pkceState, code);
 
             // Create token mapping
-            var userIdentifier = tokenResponse.UserClaims?.GetIdentifier() ?? "unknown";
+            var userIdentifier = entraIdToken.UserClaims?.GetIdentifier() ?? "unknown";
             
-            if (tokenResponse.UserClaims == null)
+            if (entraIdToken.UserClaims == null)
             {
                 _logger.LogWarning("No user claims extracted from ID token");
             }
@@ -281,14 +383,14 @@ public class OAuthController : Controller
             var tokenMapping = new TokenMapping
             {
                 ProxyAccessToken = _tokenGenerator.GenerateOpaqueToken(),
-                EntraAccessToken = tokenResponse.AccessToken,
-                ProxyRefreshToken = !string.IsNullOrEmpty(tokenResponse.RefreshToken) ? _tokenGenerator.GenerateOpaqueToken() : null,
-                EntraRefreshToken = tokenResponse.RefreshToken,
+                EntraAccessToken = entraIdToken.AccessToken,
+                ProxyRefreshToken = _tokenGenerator.GenerateOpaqueToken(), // Always generate proxy refresh token for Claude
+                EntraRefreshToken = entraIdToken.RefreshToken, // Store Entra refresh token (may be null)
                 ClientId = pkceState.ClientId,
                 AuthorizationCode = proxyAuthCode,
                 UserIdentifier = userIdentifier,
-                UserClaims = tokenResponse.UserClaims,
-                ExpiresAt = DateTime.UtcNow.AddSeconds(tokenResponse.ExpiresIn),
+                UserClaims = entraIdToken.UserClaims,
+                ExpiresAt = DateTime.UtcNow.AddSeconds(entraIdToken.ExpiresIn),
                 Scopes = pkceState.Scope ?? ""
             };
 
@@ -380,7 +482,7 @@ public class OAuthController : Controller
             _logger.LogWarning("No user claims available in token mapping");
         }
         
-        var mcpServerUrl = _configuration["MCP:ServerUrl"] ?? $"{Request.Scheme}://{Request.Host}";
+        var mcpServerUrl = _configuration["MCP:ServerUrl"]?.TrimEnd('/') ?? throw new InvalidOperationException("MCP:ServerUrl not configured");
         var jwtToken = _tokenGenerator.GenerateAccessToken(
             tokenMapping.ClientId,
             tokenMapping.UserIdentifier ?? "unknown",
@@ -389,18 +491,19 @@ public class OAuthController : Controller
             tokenMapping.UserClaims // Pass the full user claims from Entra ID
         );
 
-        var response = new
+        // Build response dynamically to only include refresh_token if available
+        var responseData = new Dictionary<string, object>
         {
-            access_token = jwtToken,
-            token_type = "Bearer",
-            expires_in = 3600,
-            refresh_token = tokenMapping.ProxyRefreshToken,
-            scope = tokenMapping.Scopes
+            ["access_token"] = jwtToken,
+            ["token_type"] = "Bearer",
+            ["expires_in"] = int.Parse(_configuration["Jwt:ExpirationMinutes"] ?? "60") * 60,
+            ["scope"] = tokenMapping.Scopes ?? "",
+            ["refresh_token"] = tokenMapping.ProxyRefreshToken! // Always include proxy refresh token
         };
 
-        _logger.LogInformation("✅ Token issued successfully for client: {ClientId}", tokenMapping.ClientId);
+        _logger.LogInformation("✅ Token issued with refresh token for client: {ClientId}", tokenMapping.ClientId);
 
-        return Ok(response);
+        return Ok(responseData);
     }
 
     private Task<IActionResult> HandleRefreshTokenGrant(TokenRequest request)
@@ -424,7 +527,8 @@ public class OAuthController : Controller
             var tenantId = _configuration["AzureAd:TenantId"];
             var clientId = _configuration["AzureAd:ClientId"];
             var clientSecret = _configuration["AzureAd:ClientSecret"];
-            var redirectUri = $"{Request.Scheme}://{Request.Host}/oauth/callback";
+            var baseUrl = _configuration["MCP:ServerUrl"]?.TrimEnd('/');
+            var redirectUri = $"{baseUrl}/oauth/callback";
 
             var tokenEndpoint = $"https://login.microsoftonline.com/{tenantId}/oauth2/v2.0/token";
 

@@ -462,61 +462,123 @@ public class InMemoryTokenStore : ITokenStore
 
 The custom login page serves multiple purposes:
 
-1. **Branding** - Maintain UX consistency
-2. **User Education** - Explain what's happening
-3. **Consent** - Show requested permissions
-4. **Terms Acceptance** - Legal requirements
-5. **Language Localization** - Non-English users
+1. **Branding** - Maintain UX consistency with your organization
+2. **User Education** - Explain what's happening before redirecting to Entra ID
+3. **Consent** - Show requested permissions clearly
+4. **Terms Acceptance** - Legal requirements can be displayed
+5. **Language Localization** - Support for non-English users
+
+### Implementation Details
+
+The `/oauth/authorize` endpoint **directly renders** the login view (no redirect):
+
+```csharp
+[HttpGet("authorize")]
+public async Task<IActionResult> Authorize(...)
+{
+    // ... validation and state management ...
+    
+    // CRITICAL: Render the view DIRECTLY (no redirect!)
+    // Claude opens /oauth/authorize in a browser window
+    // and expects to see HTML immediately, not a 302 redirect.
+    var model = new LoginPageModel
+    {
+        LoginToken = loginToken,
+        IsExpired = false,
+        CompanyName = branding.CompanyName,
+        ProductName = branding.ProductName,
+        // ... branding colors ...
+    };
+    
+    return View("~/Views/Login/Index.cshtml", model);
+}
+```
+
+**Why no redirect?** Claude opens the authorization URL in a browser and expects immediate HTML content. A redirect would break this flow.
 
 ### Flow Sequence
 
 ```
-┌─────────┐                    ┌──────────────┐                   ┌──────────┐
-│ Claude  │                    │ OAuth Proxy  │                   │ Entra ID │
-└────┬────┘                    └──────┬───────┘                   └────┬─────┘
-     │                                │                                 │
-     │ GET /oauth/authorize           │                                 │
-     ├───────────────────────────────>│                                 │
-     │                                │                                 │
-     │ 302 Redirect                   │                                 │
-     │ Location: /login?token=xyz     │                                 │
-     │<───────────────────────────────┤                                 │
-     │                                │                                 │
-     │ GET /login?token=xyz           │                                 │
-     ├───────────────────────────────>│                                 │
-     │                                │                                 │
-     │ 200 OK (HTML page)             │                                 │
-     │ [Continue] [Cancel]            │                                 │
-     │<───────────────────────────────┤                                 │
-     │                                │                                 │
-     │ POST /login/continue           │                                 │
-     ├───────────────────────────────>│                                 │
-     │                                │                                 │
-     │                                │ 302 Redirect to Entra           │
-     │<───────────────────────────────┤────────────────────────────────>│
-     │                                │                                 │
-     │                                │ [User authenticates]            │
-     │                                │                                 │
-     │                                │ 302 Redirect with code          │
-     │                                │<────────────────────────────────┤
-     │                                │                                 │
-     │ 302 Redirect to Claude         │                                 │
-     │ with authorization code        │                                 │
+┌─────────┐          ┌─────────────┐          ┌──────────────┐          ┌──────────┐
+│ Claude  │          │   Browser   │          │ OAuth Proxy  │          │ Entra ID │
+└────┬────┘          └──────┬──────┘          └──────┬───────┘          └────┬─────┘
+     │                      │                        │                        │
+     │ Opens auth URL       │                        │                        │
+     │─────────────────────>│                        │                        │
+     │                      │                        │                        │
+     │                      │ GET /oauth/authorize   │                        │
+     │                      │───────────────────────>│                        │
+     │                      │                        │                        │
+     │                      │ 200 OK (HTML page)     │                        │
+     │                      │ [Continue] [Cancel]    │                        │
+     │                      │<───────────────────────┤                        │
+     │                      │                        │                        │
+     │                      │ [User clicks Continue] │                        │
+     │                      │                        │                        │
+     │                      │ POST /oauth/continue   │                        │
+     │                      │───────────────────────>│                        │
+     │                      │                        │                        │
+     │                      │           302 Redirect to Entra                 │
+     │                      │<───────────────────────┤───────────────────────>│
+     │                      │                        │                        │
+     │                      │                        │   [User authenticates] │
+     │                      │                        │                        │
+     │                      │           302 Redirect with code                │
+     │                      │           /oauth/callback?code=ABC              │
+     │                      │<───────────────────────┤<───────────────────────┤
+     │                      │                        │                        │
+     │                      │                        │ POST token exchange    │
+     │                      │                        │ (code + client secret) │
+     │                      │                        │───────────────────────>│
+     │                      │                        │                        │
+     │                      │                        │ 200 OK                 │
+     │                      │                        │ access_token + id_token│
+     │                      │                        │ (with user claims)     │
+     │                      │                        │<───────────────────────┤
+     │                      │                        │                        │
+     │                      │ 302 Redirect to Claude │                        │
+     │                      │ with proxy auth code   │                        │
+     │<─────────────────────┤<───────────────────────┤                        │
+     │                      │                        │                        │
+     │ POST /oauth/token                             │                        │
+     │ (code_verifier + proxy auth code)             │                        │
+     │──────────────────────┼───────────────────────>│                        │
+     │                      │                        │                        │
+     │ 200 OK - JWT access_token                     │                        │
+     │ (signed by proxy, with user claims)           │                        │
+     │<─────────────────────┼────────────────────────┤                        │
+     │                      │                        │                        │
+     │ GET /mcp/v1/tools                             │                        │
+     │ Authorization: Bearer <JWT_token>             │                        │
+     │──────────────────────┼───────────────────────>│                        │
+     │                      │                        │                        │
+     │                      │      (Proxy validates JWT signature             │
+     │                      │       and extracts user claims)                 │
+     │                      │                        │                        │
+     │ 200 OK - MCP tools response                   │                        │
+     │<─────────────────────┼────────────────────────┤                        │
+```
      │<───────────────────────────────┤                                 │
 ```
 
 ### Login Token Model
 
+The login token is used to track the state between the initial authorize request and the user's continue/cancel action:
+
 ```csharp
 public class LoginTokenData
 {
     public string EncryptedState { get; set; } = default!;
-    public string ClientId { get; set; } = default!;
-    public string Resource { get; set; } = default!;
-    public string[] Scopes { get; set; } = Array.Empty<string>();
     public DateTime ExpiresAt { get; set; }
+    public bool IsUsed { get; set; }
 }
 ```
+
+**Flow:**
+1. `/oauth/authorize` creates a login token and embeds it in the form
+2. User sees the login page and clicks "Continue" or "Cancel"
+3. Form POSTs to `/oauth/continue` or `/oauth/cancel` with the token
+4. Token is validated and marked as used (single-use only)
 
 ### Security Considerations
 

@@ -54,7 +54,7 @@
                         Do you want to sign in with your <strong>Microsoft account</strong>?
                     </p>
 
-                    <form method="post" action="/Login/Continue" class="login-form">
+                    <form method="post" action="/oauth/continue" class="login-form">
                         <input type="hidden" name="token" value="@Model.LoginToken" />
                         <div class="button-container">
                             <button type="submit" class="btn btn-primary">
@@ -64,7 +64,7 @@
                         </div>
                     </form>
 
-                    <form method="post" action="/Login/Cancel" class="cancel-form">
+                    <form method="post" action="/oauth/cancel" class="cancel-form">
                         <input type="hidden" name="token" value="@Model.LoginToken" />
                         <div class="button-container">
                             <button type="submit" class="btn btn-secondary">
