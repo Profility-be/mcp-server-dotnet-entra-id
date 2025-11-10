@@ -23,18 +23,12 @@ This project demonstrates how to bridge the authentication gap between Claude AI
 **Built with the official [Model Context Protocol C# SDK](https://github.com/modelcontextprotocol/csharp-sdk)** - This SDK was a game-changer for implementing MCP servers in .NET, providing strongly-typed interfaces and automatic protocol handling.
 
 ```
-┌──────────┐      OAuth 2.1       ┌─────────────────┐      OAuth 2.0      ┌────────────┐
-│          │  (with Dynamic Reg)  │   OAuth Proxy   │   (Pre-registered)  │            │
-│ Claude   ├─────────────────────►│  (This Project) ├────────────────────►│ Entra ID   │
-│   AI     │◄─────────────────────┤                 │◄────────────────────┤            │
-└──────────┘                      └────────┬────────┘                     └────────────┘
-                                           │
-                                           │ Validates JWT tokens
-                                           ▼
-                                  ┌─────────────────┐
-                                  │   MCP Server    │
-                                  │  (Your Tools)   │
-                                  └─────────────────┘
+┌──────────┐      OAuth 2.1       ┌──────────────────────┐      OAuth 2.0      ┌────────────┐
+│          │  (with Dynamic Reg)  │                      │   (Pre-registered)  │            │
+│ Claude   ├─────────────────────►│  MCP (OAuth) Server  ├────────────────────►│ Entra ID   │
+│   AI     │◄─────────────────────┤   (this project)     │◄────────────────────┤            │
+└──────────┘                      └──────────────────────┘                     └────────────┘
+                                  
 ```
 
 ### Key Features
