@@ -649,13 +649,13 @@ In-memory (ConcurrentDictionary):
 
 ## Persistent Token Storage Recommendations
 
-- ✅ Zero external dependencies
-- ✅ Simple to understand and debug
-- ✅ Fast (sub-millisecond lookups)
-- ✅ Good for development and demos
-### Current Implementation (Development Only)
+### Current Implementation
 
-The project currently uses a static `ConcurrentDictionary<string, TokenData>` for all stateful data (tokens, PKCE state, login tokens, client mappings). Example:
+The project includes **two token storage implementations**:
+
+**1. InMemoryTokenStore (Default - Development)**
+
+Uses a static `ConcurrentDictionary<string, TokenData>` for all token data:
 
 ```csharp
 // Services/InMemoryTokenStore.cs
@@ -684,16 +684,68 @@ public class InMemoryTokenStore : ITokenStore
 - ✅ Simple to understand and debug
 - ✅ Fast (sub-millisecond lookups)
 - ✅ Good for development and demos
-- ✅ Zero external dependencies
-- ✅ Simple to understand and debug
-- ✅ Fast (sub-millisecond lookups)
-- ✅ Good for development and demos
 
 **Why you MUST replace this for production**:
 - ❌ **Data loss on restart** - All tokens invalidated when app restarts
 - ❌ **Single instance only** - Cannot scale to multiple servers
 - ❌ **No audit trail** - Cannot track token usage for security analysis
 - ❌ **Memory pressure** - Large token stores consume app memory
+
+**2. AzureTableTokenStore (Production)**
+
+Uses Azure Table Storage for persistent, scalable token storage:
+
+```csharp
+// Services/AzureTableTokenStore.cs
+public class AzureTableTokenStore : ITokenStore
+{
+    private readonly TableClient _tableClient;
+    
+    public AzureTableTokenStore(string connectionString, string tableName)
+    {
+        _tableClient = new TableClient(connectionString, tableName);
+        _tableClient.CreateIfNotExists();
+        
+        // Cleanup expired tokens on startup
+        CleanupExpiredTokens();
+    }
+    
+    public async Task StoreCodeData(TokenData codeData)
+    {
+        var entity = new TokenDataEntity
+        {
+            PartitionKey = "TokenCode",
+            RowKey = codeData.Code,
+            EntraRefreshToken = codeData.EntraRefreshToken,
+            UserClaimsJson = JsonSerializer.Serialize(codeData.UserClaims),
+            PkceStateJson = JsonSerializer.Serialize(codeData.PkceState),
+            ExpiresAt = DateTime.UtcNow.AddDays(90)
+        };
+        await _tableClient.UpsertEntityAsync(entity);
+    }
+}
+```
+
+**Configuration in appsettings.json**:
+```json
+{
+  "TokenStore": {
+    "Provider": "AzureTableStorage",
+    "AzureTableStorage": {
+      "ConnectionString": "DefaultEndpointsProtocol=https;AccountName=...;AccountKey=...;EndpointSuffix=core.windows.net",
+      "TableName": "TokenMappings"
+    }
+  }
+}
+```
+
+**Features**:
+- ✅ **Persistent storage** - Survives application restarts
+- ✅ **Scalable** - Works with multiple server instances
+- ✅ **Automatic cleanup** - Expired tokens (>90 days) removed on startup
+- ✅ **Encrypted at rest** - Azure Storage Service Encryption (256-bit AES)
+- ✅ **Cost-effective** - Pay only for what you use (~$0.045 per GB/month)
+- ✅ **No additional keys** - Uses Azure's built-in encryption
 
 ### Production Storage Comparison
 
@@ -780,22 +832,50 @@ public interface ITokenStore
 {
     Task StoreCodeData(TokenData codeData);
     Task<TokenData?> GetAndConsumeCode(string code);
-    Task<bool> RevokeTokenAsync(string opaqueToken);
-    Task CleanupExpiredTokensAsync();
 }
 ```
 
-**Step 2**: Implement Redis/SQL version (see Customization guide)
+**Step 2**: Choose your storage provider
 
-**Step 3**: Swap registration in `Program.cs`:
+For most deployments, **Azure Table Storage is included and ready to use**:
+
+```json
+// In appsettings.json
+{
+  "TokenStore": {
+    "Provider": "AzureTableStorage",
+    "AzureTableStorage": {
+      "ConnectionString": "DefaultEndpointsProtocol=https;AccountName=...;AccountKey=...;",
+      "TableName": "TokenMappings"
+    }
+  }
+}
+```
+
+The implementation handles:
+- ✅ Automatic table creation
+- ✅ Token expiration (90 days)
+- ✅ Cleanup on startup
+- ✅ Encryption at rest (Azure SSE)
+
+**Step 3**: For Redis/SQL alternatives (not included):
+
 ```csharp
-// Before (development):
-builder.Services.AddSingleton<ITokenStore, InMemoryTokenStore>();
+// In Program.cs - Azure Table (included):
+if (tokenStoreProvider == "AzureTableStorage")
+{
+    var connectionString = builder.Configuration["TokenStore:AzureTableStorage:ConnectionString"]!;
+    var tableName = builder.Configuration["TokenStore:AzureTableStorage:TableName"] ?? "TokenMappings";
+    builder.Services.AddSingleton<ITokenStore>(new AzureTableTokenStore(connectionString, tableName));
+}
+else // InMemory (default)
+{
+    builder.Services.AddSingleton<ITokenStore, InMemoryTokenStore>();
+}
 
-// After (production):
-builder.Services.AddSingleton<ITokenStore, RedisTokenStore>();
-// OR
-builder.Services.AddSingleton<ITokenStore, SqlTokenStore>();
+// For Redis/SQL (requires custom implementation):
+// builder.Services.AddSingleton<ITokenStore, RedisTokenStore>();
+// builder.Services.AddSingleton<ITokenStore, SqlTokenStore>();
 ```
 
 **Step 4**: Deploy and test

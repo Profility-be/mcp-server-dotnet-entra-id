@@ -18,7 +18,22 @@ builder.Services.AddHttpContextAccessor();
 
 // Register OAuth proxy services
 builder.Services.AddSingleton<IPkceStateManager, PkceStateManager>();
-builder.Services.AddSingleton<ITokenStore, InMemoryTokenStore>();
+
+// Configure TokenStore based on appsettings
+var tokenStoreProvider = builder.Configuration["TokenStore:Provider"] ?? "InMemory";
+if (tokenStoreProvider.Equals("AzureTableStorage", StringComparison.OrdinalIgnoreCase))
+{
+    var connectionString = builder.Configuration["TokenStore:AzureTableStorage:ConnectionString"]
+        ?? throw new InvalidOperationException("TokenStore:AzureTableStorage:ConnectionString is required when using AzureTableStorage provider");
+    var tableName = builder.Configuration["TokenStore:AzureTableStorage:TableName"] ?? "TokenMappings";
+    
+    builder.Services.AddSingleton<ITokenStore>(sp => new AzureTableTokenStore(connectionString, tableName));
+}
+else // InMemory (default)
+{
+    builder.Services.AddSingleton<ITokenStore, InMemoryTokenStore>();
+}
+
 builder.Services.AddSingleton<ILoginTokenStore, InMemoryLoginTokenStore>();
 builder.Services.AddSingleton<IClientStore, InMemoryClientStore>();
 builder.Services.AddSingleton<IProxyJwtTokenGenerator, ProxyJwtTokenGenerator>();
