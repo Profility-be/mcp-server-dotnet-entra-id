@@ -267,9 +267,19 @@ MCP/
 │   ├── PkceStateManager.cs         # Encrypted state for PKCE flows
 │   ├── InMemoryTokenStore.cs       # Token and refresh-token mappings (single-source of truth)
 │   ├── InMemoryLoginTokenStore.cs  # Short-lived login page tokens
-+│   ├── InMemoryClientStore.cs      # Deterministic client registrations for Claude (RFC 7591)
-│   ├── ProxyJwtTokenGenerator.cs   # JWT generation with correct claims
-│   └── BrandingProvider.cs         # Branding configuration provider
+│   ├── InMemoryClientStore.cs      # Deterministic client registrations for Claude (RFC 7591)
+│   ├── JwtBuilder.cs               # JWT generation with correct claims
+│   ├── BrandingProvider.cs         # Branding configuration provider
+│   ├── ConfigurationHelper.cs      # Configuration helper utilities
+│   ├── Jwt/
+│   │   ├── DefaultClaimProvider.cs # Default JWT claim provider
+│   │   ├── IClaimProvider.cs       # Interface for claim providers
+│   │   ├── JwtBuilder.cs           # JWT token building utilities
+│   │   └── SampleClaimProvider.cs  # Sample implementation of claim provider
+│   └── TokenStore/
+│       ├── AzureTableTokenStore.cs # Azure Table Storage token store
+│       ├── InMemoryTokenStore.cs   # In-memory token store for development
+│       └── ITokenStore.cs          # Token store interface
 ├── Models/
 │   ├── PkceStateData.cs            # PKCE state data
 │   ├── TokenData.cs                # Unified token model (authorization_code + refresh_token)
@@ -278,15 +288,22 @@ MCP/
 │   └── LoginPageModel.cs           # Login page view model
 ├── Tools/
 │   └── WhoAmITool.cs               # Example MCP tool
-├── Views/Login/
-│   └── Index.cshtml                # Custom login UI
+├── Views/
+│   ├── _ViewImports.cshtml         # Razor view imports
+│   └── Login/
+│       └── Index.cshtml            # Custom login UI
 ├── wwwroot/css/
 │   └── login.css                   # Login page styling
-├── Program.cs                       # ASP.NET Core configuration
+├── Properties/
+│   ├── launchSettings.json         # Launch settings for development
+│   └── PublishProfiles/            # Publish profiles
+├── Program.cs                      # ASP.NET Core configuration
 ├── appsettings.json                # Configuration
+├── appsettings.Development.json    # Development configuration
+├── MCP.csproj                      # Project file
 ├── GenerateKeys.ps1                # Key generation script
-├── README.md                        # This file
-└── README-Architecture.md           # Technical architecture details
+├── README.md                       # This file
+└── README-Architecture.md          # Technical architecture details
 ```
 
 ---
@@ -355,6 +372,16 @@ This allows you to:
 
 Branding is configured through `appsettings.json` - no code changes needed!
 
+### Custom Claims
+
+The JWT tokens issued to Claude can be extended with custom claims through the claim provider system. This allows you to add organization-specific or application-specific claims to the tokens.
+
+**How it works:**
+- Implement the `IClaimProvider` interface in `MCP/Services/Jwt/`
+- Register your provider in `Program.cs` alongside the default providers
+- Claims are added in registration order, enabling chaining between providers
+
+See for more info README-Architecture.md
 
 ---
 

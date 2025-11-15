@@ -1,7 +1,7 @@
 using MCP.Models;
 using System.Collections.Concurrent;
 
-namespace MCP.Services;
+namespace Profility.MCP.Services.TokenStore;
 
 /// <summary>
 /// In-memory store for single-use codes.

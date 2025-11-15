@@ -1,6 +1,6 @@
 using MCP.Models;
 
-namespace MCP.Services;
+namespace Profility.MCP.Services.TokenStore;
 
 /// <summary>
 /// Interface for token storage implementations.

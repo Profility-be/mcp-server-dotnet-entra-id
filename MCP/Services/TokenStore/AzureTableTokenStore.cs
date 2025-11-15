@@ -1,9 +1,10 @@
 using Azure;
 using Azure.Data.Tables;
+using MCP.Controllers;
 using MCP.Models;
 using System.Text.Json;
 
-namespace MCP.Services;
+namespace Profility.MCP.Services.TokenStore;
 
 /// <summary>
 /// Azure Table Storage implementation of ITokenStore.
@@ -89,7 +90,7 @@ public class AzureTableTokenStore : ITokenStore
                 Code = entity.RowKey,
                 EntraRefreshToken = entity.EntraRefreshToken,
                 UserClaims = entity.UserClaimsJson != null 
-                    ? JsonSerializer.Deserialize<Controllers.UserClaims>(entity.UserClaimsJson) 
+                    ? JsonSerializer.Deserialize<UserClaims>(entity.UserClaimsJson) 
                     : null,
                 PkceState = JsonSerializer.Deserialize<PkceStateData>(entity.PkceStateJson)!,
                 CreatedAt = entity.CreatedAt

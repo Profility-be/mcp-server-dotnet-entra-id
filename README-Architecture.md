@@ -379,6 +379,83 @@ See the full implementation in `MCP/Services/InMemoryTokenStore.cs` for details 
 
 ---
 
+## JWT Token Customization
+
+### Claim Provider System
+
+The proxy implements an extensible claim provider system that allows customization of JWT tokens issued to Claude. This enables adding organization-specific or application-specific claims beyond the standard Entra ID user information.
+
+### Architecture
+
+```csharp
+public interface IClaimProvider
+{
+    void AddClaims(List<Claim> claims, ClaimProviderContext context);
+}
+```
+
+**Key Features:**
+- **Chaining**: Providers execute in registration order, allowing later providers to build on claims from earlier ones
+- **Fail-safe**: If a provider fails, execution continues with remaining providers
+- **Context-aware**: Providers receive relevant context including Entra ID user claims, client info, and scopes
+
+### Default Claim Provider
+
+The `DefaultClaimProvider` adds standard Entra ID claims to every JWT token:
+
+### Custom Claim Providers
+
+Organizations can implement custom claim providers for additional claims:
+
+```csharp
+public class CustomClaimProvider : IClaimProvider
+{
+    public void AddClaims(List<Claim> claims, ClaimProviderContext context)
+    {
+        // Add organization-specific claims
+        claims.Add(new Claim("department", GetUserDepartment(context.UserIdentifier)));
+        claims.Add(new Claim("cost_center", GetUserCostCenter(context.UserIdentifier)));
+        claims.Add(new Claim("employee_id", GetEmployeeId(context.UserIdentifier)));
+        
+        // Conditional claims based on scopes
+        if (context.Scopes.Contains("admin"))
+        {
+            claims.Add(new Claim("role", "administrator"));
+        }
+    }
+}
+```
+
+See `MCP/Services/Jwt/SampleClaimProvider.cs` for a complete working example that demonstrates how to add custom claims to JWT tokens.
+
+### Registration
+
+Claim providers are registered as services in `Program.cs`:
+
+```csharp
+// Register claim providers (executed in registration order)
+builder.Services.AddSingleton<IClaimProvider, DefaultClaimProvider>();  // Always first
+builder.Services.AddSingleton<IClaimProvider, CustomClaimProvider>();   // Your custom provider
+builder.Services.AddSingleton<IClaimProvider, AnotherProvider>();      // Additional providers
+```
+
+### Use Cases
+
+**Enterprise Scenarios:**
+- **Department/Roles**: Add organizational hierarchy claims
+- **Cost Centers**: Include financial attribution data
+- **Compliance**: Add audit-required claims (GDPR, SOX, etc.)
+- **Application-specific**: Custom claims for specific MCP tools
+
+**Security Considerations:**
+- Claims are included in JWT tokens sent to Claude
+- Ensure sensitive information is not exposed inappropriately
+- Consider token size limits (JWTs should remain reasonably small)
+- Validate claim values to prevent injection attacks
+
+
+---
+
 ## Custom Login Page Flow
 
 ### Why an Intermediate Page?

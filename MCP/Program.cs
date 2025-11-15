@@ -4,6 +4,8 @@ using ModelContextProtocol.Server;
 using System.Text;
 using System.Security.Cryptography;
 using MCP.Services;
+using MCP.Services.Jwt;
+using Profility.MCP.Services.TokenStore;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -42,8 +44,13 @@ else // InMemory (default)
 
 builder.Services.AddSingleton<ILoginTokenStore, InMemoryLoginTokenStore>();
 builder.Services.AddSingleton<IClientStore, InMemoryClientStore>();
-builder.Services.AddSingleton<IProxyJwtTokenGenerator, ProxyJwtTokenGenerator>();
+builder.Services.AddSingleton<IJwtBuilder, JwtBuilder>();
 builder.Services.AddSingleton<IBrandingProvider, BrandingProvider>();
+
+// Register claim providers
+builder.Services.AddSingleton<IClaimProvider, DefaultClaimProvider>();  // Default provider (adds standard Entra ID claims)
+builder.Services.AddSingleton<IClaimProvider, SampleClaimProvider>();   // Sample custom claim provider
+// Other claim providers can be registered here
 
 // Add Controllers for OAuth endpoints
 builder.Services.AddControllers();

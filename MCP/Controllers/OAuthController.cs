@@ -4,6 +4,8 @@ using System.Text.Json.Serialization;
 using System.Text;
 using MCP.Models;
 using MCP.Services;
+using MCP.Services.Jwt;
+using Profility.MCP.Services.TokenStore;
 
 namespace MCP.Controllers;
 
@@ -21,7 +23,7 @@ public class OAuthController : Controller
     private readonly IPkceStateManager _stateManager;
     private readonly ITokenStore _tokenStore;
     private readonly ILoginTokenStore _loginTokenStore;
-    private readonly IProxyJwtTokenGenerator _tokenGenerator;
+    private readonly IJwtBuilder _tokenGenerator;
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly IBrandingProvider _brandingProvider;
 
@@ -32,7 +34,7 @@ public class OAuthController : Controller
         IPkceStateManager stateManager,
         ITokenStore tokenStore,
         ILoginTokenStore loginTokenStore,
-        IProxyJwtTokenGenerator tokenGenerator,
+        IJwtBuilder tokenGenerator,
         IHttpClientFactory httpClientFactory,
         IBrandingProvider brandingProvider)
     {
@@ -326,8 +328,7 @@ public class OAuthController : Controller
                 if (!string.IsNullOrEmpty(newTokens.RefreshToken)) { entraRefreshToken = newTokens.RefreshToken; }
             }
 
-            var mcpServerUrl = _configuration["MCP:ServerUrl"];
-            var jwtToken = _tokenGenerator.GenerateAccessToken(tokenData.PkceState.ClientId, tokenData.UserClaims?.GetIdentifier() ?? "unknown", mcpServerUrl!, tokenData.PkceState.Scope ?? "", tokenData.UserClaims);
+            var jwtToken = _tokenGenerator.BuildJwt(tokenData.PkceState.ClientId, tokenData.UserClaims?.GetIdentifier() ?? "unknown", tokenData.PkceState.Scope ?? "", tokenData.UserClaims);
 
             var newCode = _tokenGenerator.GenerateOpaqueToken();
             await _tokenStore.StoreCodeData(new TokenData
@@ -338,6 +339,10 @@ public class OAuthController : Controller
                 PkceState = tokenData.PkceState,
                 CreatedAt = DateTime.UtcNow
             });
+
+            var expirationTimeUtc = DateTime.UtcNow.AddSeconds(_configuration.JwtExpirationSeconds);
+            var minutes = Math.Round(_configuration.JwtExpirationSeconds / 60.0);
+            _logger.LogInformation("Token issued with grant_type {GrantType}, expires at {ExpirationTimeUtc:yyyy-MM-dd HH:mm:ss} UTC, expires in {Minutes} minutes", request.GrantType, expirationTimeUtc, minutes);
 
             return Ok(new
             {

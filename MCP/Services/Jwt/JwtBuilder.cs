@@ -5,31 +5,63 @@ using System.Text;
 using Microsoft.IdentityModel.Tokens;
 using MCP.Controllers; // For UserClaims
 
-namespace MCP.Services;
+namespace MCP.Services.Jwt;
 
 /// <summary>
 /// Generates proxy JWT tokens for Claude that can be validated by the MCP server.
 /// These tokens contain the correct 'aud' claim (MCP server URL) per RFC 8707.
 /// </summary>
-public interface IProxyJwtTokenGenerator
+public interface IJwtBuilder
 {
-    string GenerateAccessToken(string clientId, string userIdentifier, string mcpServerUrl, string scopes, UserClaims? userClaims = null);
+    /// <summary>
+    /// Builds a JWT access token for the authenticated user.
+    /// This token is used by Claude to access MCP tools and contains user claims from Entra ID.
+    /// The token has the MCP server URL as audience (aud claim) per RFC 8707 Resource Indicators.
+    /// Used in the OAuth token exchange flow after successful Entra ID authentication.
+    /// </summary>
+    string BuildJwt(string clientId, string userIdentifier, string scopes, UserClaims? userClaims = null);
+
+    /// <summary>
+    /// Generates a cryptographically secure opaque token for external use.
+    /// These tokens are given to Claude and map internally to JWT tokens with user claims.
+    /// Used to maintain separation between external tokens (opaque) and internal tokens (JWT).
+    /// </summary>
     string GenerateOpaqueToken();
+
+    /// <summary>
+    /// Validates a PKCE code verifier against its corresponding code challenge.
+    /// Ensures the code_verifier sent by Claude matches the code_challenge from the authorization request.
+    /// Critical for PKCE security in the OAuth authorization code flow.
+    /// </summary>
     bool ValidateCodeVerifier(string codeVerifier, string codeChallenge);
+
+    /// <summary>
+    /// Generates a cryptographically secure PKCE code verifier.
+    /// Used by the proxy when acting as OAuth client to Entra ID in the dual PKCE flow.
+    /// The code verifier is 43-128 characters of unreserved characters per RFC 7636.
+    /// </summary>
     string GenerateCodeVerifier();
+
+    /// <summary>
+    /// Generates a PKCE code challenge from a code verifier.
+    /// Computed as BASE64URL(SHA256(ASCII(code_verifier))) per RFC 7636.
+    /// Used in the authorization request to Entra ID to prevent authorization code interception attacks.
+    /// </summary>
     string GenerateCodeChallenge(string codeVerifier);
 }
 
-public class ProxyJwtTokenGenerator : IProxyJwtTokenGenerator
+public class JwtBuilder : IJwtBuilder
 {
     private readonly IAppConfiguration _configuration;
-    private readonly ILogger<ProxyJwtTokenGenerator> _logger;
+    private readonly ILogger<JwtBuilder> _logger;
     private readonly SymmetricSecurityKey _signingKey;
+    private readonly IEnumerable<IClaimProvider> _claimProviders;
 
-    public ProxyJwtTokenGenerator(IAppConfiguration configuration, ILogger<ProxyJwtTokenGenerator> logger)
+    public JwtBuilder(IAppConfiguration configuration, ILogger<JwtBuilder> logger, IEnumerable<IClaimProvider> claimProviders)
     {
         _configuration = configuration;
         _logger = logger;
+        _claimProviders = claimProviders;
         
         // Generate or retrieve signing key
         // In production, store this in Azure Key Vault
@@ -38,52 +70,43 @@ public class ProxyJwtTokenGenerator : IProxyJwtTokenGenerator
         _signingKey = new SymmetricSecurityKey(keyBytes);
     }
 
-    public string GenerateAccessToken(string clientId, string userIdentifier, string mcpServerUrl, string scopes, UserClaims? userClaims = null)
+    public string BuildJwt(string clientId, string userIdentifier, string scopes, UserClaims? userClaims = null)
     {
-        _logger.LogInformation("Generating JWT access token for client: {ClientId}", clientId);
+        _logger.LogInformation("Generating JWT access token for client: {ClientId}", clientId); 
         
+        string mcpServerUrl = _configuration["MCP:ServerUrl"]!;
         var expirationMinutes = _configuration.JwtExpirationMinutes; 
         
         var claims = new List<Claim>
         {
-            new(JwtRegisteredClaimNames.Sub, userIdentifier),
-            new(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString()),
-            new(JwtRegisteredClaimNames.Iat, DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString(), ClaimValueTypes.Integer64),
+            new(JwtRegisteredClaimNames.Sub, userIdentifier), // Subject: unique identifier for the user
+            new(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString()), // JWT ID: unique identifier for this token
+            new(JwtRegisteredClaimNames.Iat, DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString(), ClaimValueTypes.Integer64), // Issued At: timestamp when token was issued
             new("client_id", clientId),
             new("scope", scopes)
         };
 
-        // Add user claims from Entra ID token if available
-        if (userClaims == null)
+        // New step: Call all claim providers to add extra claims
+        var context = new ClaimProviderContext
         {
-            _logger.LogWarning("No user claims available for JWT");
-        }
-        
-        if (userClaims != null)
+            ClientId = clientId,
+            UserIdentifier = userIdentifier,
+            McpServerUrl = mcpServerUrl,
+            Scopes = scopes,
+            EntraIDUserClaims = userClaims
+        };
+
+        foreach (var provider in _claimProviders)
         {
-            if (!string.IsNullOrEmpty(userClaims.Name))
-                claims.Add(new Claim(JwtRegisteredClaimNames.Name, userClaims.Name));
-            
-            if (!string.IsNullOrEmpty(userClaims.Email))
-                claims.Add(new Claim(JwtRegisteredClaimNames.Email, userClaims.Email));
-            
-            if (!string.IsNullOrEmpty(userClaims.GivenName))
-                claims.Add(new Claim(JwtRegisteredClaimNames.GivenName, userClaims.GivenName));
-            
-            if (!string.IsNullOrEmpty(userClaims.FamilyName))
-                claims.Add(new Claim(JwtRegisteredClaimNames.FamilyName, userClaims.FamilyName));
-            
-            if (!string.IsNullOrEmpty(userClaims.ObjectId))
-                claims.Add(new Claim("oid", userClaims.ObjectId));
-            
-            if (!string.IsNullOrEmpty(userClaims.PreferredUsername))
-                claims.Add(new Claim("preferred_username", userClaims.PreferredUsername));
-            
-            if (!string.IsNullOrEmpty(userClaims.Upn))
-                claims.Add(new Claim("upn", userClaims.Upn));
-            
-            if (!string.IsNullOrEmpty(userClaims.TenantId))
-                claims.Add(new Claim("tid", userClaims.TenantId));
+            try
+            {
+                provider.AddClaims(claims, context);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Claim provider {ProviderType} failed to add claims", provider.GetType().Name);
+                // Continue with next providers (fail-safe)
+            }
         }
 
         var tokenDescriptor = new SecurityTokenDescriptor
