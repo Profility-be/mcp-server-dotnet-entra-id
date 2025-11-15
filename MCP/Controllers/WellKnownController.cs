@@ -26,7 +26,7 @@ public class WellKnownController : ControllerBase
     [HttpGet(".well-known/oauth-protected-resource")]
     public IActionResult GetProtectedResourceMetadata()
     {
-        var baseUrl = _configuration["MCP:ServerUrl"]?.TrimEnd('/');
+        var baseUrl = _configuration["MCP:ServerUrl"];
         var clientId = _configuration["AzureAd:ClientId"];
         
         _logger.LogInformation("Protected resource metadata requested from {BaseUrl}", baseUrl);
@@ -66,7 +66,7 @@ public class WellKnownController : ControllerBase
     [HttpGet(".well-known/oauth-authorization-server")]
     public IActionResult GetAuthorizationServerMetadata()
     {
-        var baseUrl = _configuration["MCP:ServerUrl"]?.TrimEnd('/');
+        var baseUrl = _configuration["MCP:ServerUrl"];
         
         _logger.LogInformation("Authorization server metadata requested from {BaseUrl}", baseUrl);
 

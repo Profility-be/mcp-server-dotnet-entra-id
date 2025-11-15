@@ -15,7 +15,7 @@ namespace MCP.Controllers;
 [Route("oauth")]
 public class OAuthController : Controller
 {
-    private readonly IConfiguration _configuration;
+    private readonly IAppConfiguration _configuration;
     private readonly ILogger<OAuthController> _logger;
     private readonly IClientStore _clientStore;
     private readonly IPkceStateManager _stateManager;
@@ -26,7 +26,7 @@ public class OAuthController : Controller
     private readonly IBrandingProvider _brandingProvider;
 
     public OAuthController(
-        IConfiguration configuration,
+        IAppConfiguration configuration,
         ILogger<OAuthController> logger,
         IClientStore clientStore,
         IPkceStateManager stateManager,
@@ -173,14 +173,11 @@ public class OAuthController : Controller
             if (stateData == null) { return BadRequest("Invalid state data"); }
 
             // Build the Entra ID authorization URL
-            var tenantId = _configuration["AzureAd:TenantId"];
             var clientId = _configuration["AzureAd:ClientId"];
-            var baseScope = _configuration["AzureAd:Scope"] ?? $"api://{clientId}/MCP.Access";
-            var fullScope = $"{baseScope} openid profile email offline_access";  // offline_access = refresh token support
-            var baseUrl = _configuration["MCP:ServerUrl"]?.TrimEnd('/');
-            var redirectUri = $"{baseUrl}/oauth/callback";
+            var fullScope = _configuration.FullScope;
+            var redirectUri = _configuration.OAuthCallbackUrl;
 
-            var entraAuthUrl = $"https://login.microsoftonline.com/{tenantId}/oauth2/v2.0/authorize" +
+            var entraAuthUrl = _configuration.EntraAuthorizationUrl + 
                 $"?client_id={Uri.EscapeDataString(clientId!)}" +
                 $"&response_type=code" +
                 $"&redirect_uri={Uri.EscapeDataString(redirectUri)}" +
@@ -329,8 +326,8 @@ public class OAuthController : Controller
                 if (!string.IsNullOrEmpty(newTokens.RefreshToken)) { entraRefreshToken = newTokens.RefreshToken; }
             }
 
-            var mcpServerUrl = _configuration["MCP:ServerUrl"]?.TrimEnd('/') ?? throw new InvalidOperationException("MCP:ServerUrl not configured");
-            var jwtToken = _tokenGenerator.GenerateAccessToken(tokenData.PkceState.ClientId, tokenData.UserClaims?.GetIdentifier() ?? "unknown", mcpServerUrl, tokenData.PkceState.Scope ?? "", tokenData.UserClaims);
+            var mcpServerUrl = _configuration["MCP:ServerUrl"];
+            var jwtToken = _tokenGenerator.GenerateAccessToken(tokenData.PkceState.ClientId, tokenData.UserClaims?.GetIdentifier() ?? "unknown", mcpServerUrl!, tokenData.PkceState.Scope ?? "", tokenData.UserClaims);
 
             var newCode = _tokenGenerator.GenerateOpaqueToken();
             await _tokenStore.StoreCodeData(new TokenData
@@ -346,7 +343,7 @@ public class OAuthController : Controller
             {
                 access_token = jwtToken,
                 token_type = "Bearer",
-                expires_in = int.Parse(_configuration["Jwt:ExpirationMinutes"] ?? "60") * 60,
+                expires_in = _configuration.JwtExpirationSeconds,
                 refresh_token = newCode,
                 scope = tokenData.PkceState.Scope
             });
@@ -362,10 +359,9 @@ public class OAuthController : Controller
     {
         try
         {
-            var tenantId = _configuration["AzureAd:TenantId"];
             var clientId = _configuration["AzureAd:ClientId"];
             var clientSecret = _configuration["AzureAd:ClientSecret"];
-            var tokenEndpoint = $"https://login.microsoftonline.com/{tenantId}/oauth2/v2.0/token";
+            var tokenEndpoint = _configuration.EntraTokenUrl;
 
             var formData = new Dictionary<string, string>
             {
@@ -376,9 +372,8 @@ public class OAuthController : Controller
 
             if (grantType == "authorization_code")
             {
-                var baseUrl = _configuration["MCP:ServerUrl"]?.TrimEnd('/');
                 formData["code"] = code!;
-                formData["redirect_uri"] = $"{baseUrl}/oauth/callback";
+                formData["redirect_uri"] = _configuration.OAuthCallbackUrl;
                 formData["code_verifier"] = stateData.ProxyCodeVerifier ?? "";
             }
             else if (grantType == "refresh_token")

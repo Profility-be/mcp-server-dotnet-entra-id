@@ -22,11 +22,11 @@ public interface IProxyJwtTokenGenerator
 
 public class ProxyJwtTokenGenerator : IProxyJwtTokenGenerator
 {
-    private readonly IConfiguration _configuration;
+    private readonly IAppConfiguration _configuration;
     private readonly ILogger<ProxyJwtTokenGenerator> _logger;
     private readonly SymmetricSecurityKey _signingKey;
 
-    public ProxyJwtTokenGenerator(IConfiguration configuration, ILogger<ProxyJwtTokenGenerator> logger)
+    public ProxyJwtTokenGenerator(IAppConfiguration configuration, ILogger<ProxyJwtTokenGenerator> logger)
     {
         _configuration = configuration;
         _logger = logger;
@@ -42,7 +42,7 @@ public class ProxyJwtTokenGenerator : IProxyJwtTokenGenerator
     {
         _logger.LogInformation("Generating JWT access token for client: {ClientId}", clientId);
         
-        var expirationMinutes = int.Parse(_configuration["Jwt:ExpirationMinutes"] ?? "60");
+        var expirationMinutes = _configuration.JwtExpirationMinutes; 
         
         var claims = new List<Claim>
         {

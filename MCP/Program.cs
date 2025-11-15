@@ -7,6 +7,12 @@ using MCP.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// Register IAppConfiguration as a singleton wrapper around IConfiguration
+// Also register as IConfiguration so both interfaces resolve to the same instance
+var appConfiguration = new AppConfiguration(builder.Configuration);
+builder.Services.AddSingleton<IAppConfiguration>(appConfiguration);
+builder.Services.AddSingleton<IConfiguration>(appConfiguration);
+
 // Add Memory Cache for in-memory storage
 builder.Services.AddMemoryCache();
 
@@ -60,8 +66,8 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             ValidateAudience = true,
             ValidateLifetime = true,
             ValidateIssuerSigningKey = true,
-            ValidIssuer = builder.Configuration["MCP:ServerUrl"],
-            ValidAudience = builder.Configuration["MCP:ServerUrl"],
+            ValidIssuer = appConfiguration["MCP:ServerUrl"],
+            ValidAudience = appConfiguration["MCP:ServerUrl"],
             IssuerSigningKey = signingKey,
             ClockSkew = TimeSpan.FromMinutes(5)
         };
@@ -130,9 +136,9 @@ app.MapControllers();
 app.MapMcp().RequireAuthorization();
 
 app.Logger.LogInformation("Profility MCP OAuth Proxy starting...");
-app.Logger.LogInformation("MCP Server URL: {ServerUrl}", builder.Configuration["MCP:ServerUrl"]);
-app.Logger.LogInformation("Azure AD Tenant: {TenantId}", builder.Configuration["AzureAd:TenantId"]);
-app.Logger.LogInformation("Azure AD Client: {ClientId}", builder.Configuration["AzureAd:ClientId"]);
+app.Logger.LogInformation("MCP Server URL: {ServerUrl}", appConfiguration["MCP:ServerUrl"]);
+app.Logger.LogInformation("Azure AD Tenant: {TenantId}", appConfiguration["AzureAd:TenantId"]);
+app.Logger.LogInformation("Azure AD Client: {ClientId}", appConfiguration["AzureAd:ClientId"]);
 
 app.Run();
 
