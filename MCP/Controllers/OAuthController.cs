@@ -6,6 +6,7 @@ using MCP.Models;
 using MCP.Services;
 using MCP.Services.Jwt;
 using Profility.MCP.Services.TokenStore;
+using Profility.MCP.Services.ClientStore;
 
 namespace MCP.Controllers;
 
@@ -63,13 +64,23 @@ public class OAuthController : Controller
         {
             if (request.RedirectUris == null || request.RedirectUris.Count == 0) { return BadRequest(new { error = "invalid_redirect_uri", error_description = "At least one redirect URI is required" }); }
 
-            // Validate redirect URIs: only allow HTTPS and configured host (default: claude.ai)
-            var allowedHost = _configuration["OAuth:AllowedRedirectHost"] ?? "claude.ai";
+            // Validate redirect URIs: only HTTPS required, optional strict validation
+            var validateRedirectUris = bool.TryParse(_configuration["OAuth:ValidateRedirectUris"], out var validate) && validate;
             foreach (var uriString in request.RedirectUris)
             {
-                if (!Uri.TryCreate(uriString, UriKind.Absolute, out var uri) || uri.Scheme != Uri.UriSchemeHttps || !string.Equals(uri.Host, allowedHost, StringComparison.OrdinalIgnoreCase))
+                if (!Uri.TryCreate(uriString, UriKind.Absolute, out var uri) || uri.Scheme != Uri.UriSchemeHttps)
                 {
-                    return BadRequest(new { error = "invalid_redirect_uri", error_description = $"Redirect URI not allowed: {uriString}" });
+                    return BadRequest(new { error = "invalid_redirect_uri", error_description = $"Redirect URI must use HTTPS: {uriString}" });
+                }
+                
+                // Optional: strict validation can be enabled via OAuth:ValidateRedirectUris setting
+                if (validateRedirectUris)
+                {
+                    var allowedHosts = new[] { "claude.ai", "chatgpt.com" };
+                    if (!allowedHosts.Any(host => string.Equals(uri.Host, host, StringComparison.OrdinalIgnoreCase)))
+                    {
+                        return BadRequest(new { error = "invalid_redirect_uri", error_description = $"Redirect URI host not allowed: {uriString}" });
+                    }
                 }
             }
 

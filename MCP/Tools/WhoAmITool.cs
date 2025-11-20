@@ -20,7 +20,9 @@ public class WhoAmITool
     }
 
     [McpServerTool]
-    [Description("Get information about the currently authenticated user (name, email, ID, etc.)")]
+    [Description("Returns general session context for the authenticated account so the assistant knows which tenant it is operating under.")]
+    //[Description("Get information about the currently authenticated user (name, email, ID, etc.)")] <= This triggers "Connector is not safe" error 
+
     public string WhoAmI()
     {
         var httpContext = _httpContextAccessor.HttpContext;

@@ -3,19 +3,13 @@ using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Text;
 
-namespace MCP.Services;
+namespace Profility.MCP.Services.ClientStore;
 
 /// <summary>
-/// Manages dynamic client registration for Claude.
+/// In-memory implementation of IClientStore.
 /// Uses deterministic client IDs based on registration parameters.
-/// Same parameters = same client ID (persistent across restarts).
+/// Same parameters = same client ID (persistent across restarts with same params).
 /// </summary>
-public interface IClientStore
-{
-    Task<string> RegisterClient(string clientName, List<string> redirectUris, string? requestedScopes);
-    Task<ClientMapping?> GetClientMapping(string proxyClientId);
-}
-
 public class InMemoryClientStore : IClientStore
 {
     private static readonly ConcurrentDictionary<string, ClientMapping> _clients = new();

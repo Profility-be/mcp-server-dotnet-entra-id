@@ -5,9 +5,9 @@ A .NET boilerplate for building secure MCP servers integrated with Microsoft Ent
 This project provides a ready-to-use foundation for anyone who wants to quickly set up a Model Context Protocol (MCP) server that’s secured with Microsoft Entra ID (Azure AD).
 It includes all the core components needed to authenticate users from your organization, manage user identity securely, and expose MCP tools in a trusted enterprise environment.
 
-Out of the box, it’s tested and fully compatible with Claude AI, making it the fastest way to get your own Entra-protected MCP server running in minutes.
+Out of the box, it’s tested and compatible with Claude AI and ChatGPT, making it the fastest way to get your own Entra-protected MCP server running in minutes.
 
-This project also demonstrates how to bridge the authentication gap between Claude AI and Microsoft Entra ID, ensuring both systems can work together securely and seamlessly.
+This project demonstrates how to bridge the authentication gap between MCP clients (Claude AI, ChatGPT) and Microsoft Entra ID, ensuring these systems can work together securely and seamlessly.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](../LICENSE)
 [![.NET](https://img.shields.io/badge/.NET-8.0-512BD4?logo=dotnet)](https://dotnet.microsoft.com/download)
@@ -54,7 +54,9 @@ This project demonstrates how to bridge the authentication gap between Claude AI
 
 **✅ Claude AI** - Fully tested and working with Claude Desktop and web interface
 
-**⚠️ Other MCP Clients** - This proxy implements the MCP OAuth specification. While it may work with other MCP clients, it has **only been tested with Claude AI**. VS Code's MCP integration typically uses direct OAuth with pre-configured client credentials and may not require this proxy
+**✅ ChatGPT** - Tested and working; see Troubleshooting for notes about Dynamic Client Registration and persistent client storage requirements.
+
+**⚠️ Other MCP Clients** - This proxy implements the MCP OAuth specification. While it may work with other MCP clients, it has primarily been tested with Claude AI and ChatGPT. VS Code's MCP integration typically uses direct OAuth with pre-configured client credentials and may not require this proxy
 
 ---
 
@@ -177,6 +179,13 @@ Copy the generated values to your configuration.
       "ConnectionString": "DefaultEndpointsProtocol=https;AccountName=YOUR_ACCOUNT;AccountKey=YOUR_KEY;EndpointSuffix=core.windows.net",
       "TableName": "TokenMappings"
     }
+  },
+  "ClientStore": {
+    "Provider": "InMemory",
+    "AzureTableStorage": {
+      "ConnectionString": "DefaultEndpointsProtocol=https;AccountName=YOUR_ACCOUNT;AccountKey=YOUR_KEY;EndpointSuffix=core.windows.net",
+      "TableName": "ClientRegistrations"
+    }
   }
 }
 ```
@@ -194,6 +203,14 @@ Copy the generated values to your configuration.
   - `TableName` defaults to `TokenMappings` if not specified
   - Automatically creates the table on startup
   - Expired tokens (>90 days) are cleaned up on each application restart
+
+**Client Storage Options**:
+- **`InMemory`** (default) - Uses deterministic client IDs (SHA-256 hash), suitable for development
+- **`AzureTableStorage`** - Uses Azure Table Storage for persistent client registrations
+  - Configure `ConnectionString` with your Azure Storage account connection string
+  - `TableName` defaults to `ClientRegistrations` if not specified
+  - Uses random GUIDs for client IDs
+  - **Required for ChatGPT** - ChatGPT only registers once and expects persistent client IDs
 
 ### 5. Run the Server
 
@@ -265,12 +282,13 @@ MCP/
 │   └── WellKnownController.cs      # Discovery endpoints
 ├── Services/
 │   ├── PkceStateManager.cs         # Encrypted state for PKCE flows
-│   ├── InMemoryTokenStore.cs       # Token and refresh-token mappings (single-source of truth)
 │   ├── InMemoryLoginTokenStore.cs  # Short-lived login page tokens
-│   ├── InMemoryClientStore.cs      # Deterministic client registrations for Claude (RFC 7591)
-│   ├── JwtBuilder.cs               # JWT generation with correct claims
 │   ├── BrandingProvider.cs         # Branding configuration provider
 │   ├── ConfigurationHelper.cs      # Configuration helper utilities
+│   ├── ClientStore/
+│   │   ├── AzureTableClientStore.cs # Azure Table Storage client store
+│   │   ├── InMemoryClientStore.cs  # In-memory client store for development
+│   │   └── IClientStore.cs         # Client store interface
 │   ├── Jwt/
 │   │   ├── DefaultClaimProvider.cs # Default JWT claim provider
 │   │   ├── IClaimProvider.cs       # Interface for claim providers
@@ -409,9 +427,75 @@ See for more info README-Architecture.md
 - Check Entra ID API permissions are granted
 - Verify admin consent was provided
 
-For more troubleshooting, see logs at `Information` level.
 
----
+### ChatGTP Issue: `invalid_client` after restarting the MCP service
+When the MCP service is restarted, ChatGPT may display the following error during the OAuth flow:
+
+```
+{
+"error": "invalid_client",
+"error_description": "Client not found"
+}
+
+```
+
+**Cause:**
+This happens because **Dynamic Client Registration (DCR)** behaves differently between clients:
+
+- **Claude AI** automatically re-registers itself whenever the application restarts.  
+- **ChatGPT** only performs DCR **once**, at the moment the connector is added.  
+  After that, ChatGPT expects the `client_id` to remain valid indefinitely.
+
+If the MCP server stores registered clients **in-memory**, a restart clears the client registry and ChatGPT continues sending an old `client_id` that no longer exists — resulting in `invalid_client`.
+
+**Solution:**
+Use a **persistent client store** instead of an in-memory store when testing with ChatGPT:
+
+```json
+"ClientStore": {
+  "Provider": "AzureTableStorage",
+  "AzureTableStorage": {
+    "ConnectionString": "DefaultEndpointsProtocol=https;...",
+    "TableName": "ClientRegistrations"
+  }
+}
+```
+
+This ensures the registered `client_id` survives application restarts and prevents the OAuth handshake from failing.
+
+### ChatGTP Issue: “Connector is not safe” error
+**Problem description:**
+When connecting the custom MCP server in ChatGPT, the connection initially appeared successful.  
+The connector showed as **connected**, but **no tools were available**.  
+Refreshing the tools (Developer Tools → Network) revealed an API response:
+```
+
+{ "detail": "Connector is not safe" }
+
+```
+
+This issue was **not** caused by the MCP server, authentication flow, devtunnels, or Entra ID.  Instead, ChatGPT rejected the connector during its **safety evaluation phase**, which scans the tool metadata (name + description) for anything suggesting access to **personal data** (PII).
+
+Even though the server was fully secure, the original tool description explicitly mentioned  
+**“name, email, ID”**, which triggered ChatGPT’s safety heuristics and caused it to block the connector.
+
+**Cause:**
+ChatGPT flags a connector as “not safe” if any tool description implies it retrieves **user identity**, **email**, **personal information**, or other sensitive data — regardless of whether the connector is private or trusted.
+The safety check operates purely on **tool metadata**, not on your actual implementation.
+
+**Solution:**
+Rewrite the tool description to avoid explicit references to personal information.  
+The tool may still return full identity details internally — the scan only evaluates the metadata text.
+
+**Example:**
+Original unsafe description:
+```
+Get information about the currently authenticated user (name, email, ID, etc.)
+```
+New safe description:
+```
+Returns basic operational context about the authenticated session.
+```
 
 ## Security Considerations
 
@@ -434,14 +518,18 @@ For more troubleshooting, see logs at `Information` level.
 This reference implementation uses **in-memory storage** by default for simplicity:
 - **PKCE State** - Stored in a static `ConcurrentDictionary` (in-memory)
 - **Token Mappings** - Configurable: `InMemory` (default) or `AzureTableStorage`
-- **Client Registrations** - Stored in a static `ConcurrentDictionary` (in-memory)
+- **Client Registrations** - Configurable: `InMemory` (default) or `AzureTableStorage`
 - **Login Tokens** - Stored in a static `ConcurrentDictionary` (in-memory)
 
-**For production deployments**, use Azure Table Storage for token persistence:
-- ✅ **Azure Table Storage** - Production-ready token storage included
+**For production deployments**, use Azure Table Storage for persistence:
+- ✅ **Azure Table Storage for Tokens** - Production-ready token storage included
   - Set `TokenStore:Provider` to `AzureTableStorage` in appsettings.json
   - Automatic table creation on startup
   - Expired token cleanup (>90 days) on application restart
+- ✅ **Azure Table Storage for Clients** - Production-ready client storage included
+  - Set `ClientStore:Provider` to `AzureTableStorage` in appsettings.json
+  - **Required for ChatGPT** compatibility (persistent client IDs)
+  - Uses random GUIDs instead of deterministic hashing
 - ✅ **Redis** - Alternative for distributed cache (not included, see Architecture docs)
 - ✅ **SQL Server** - Alternative for audit trail requirements (not included, see Architecture docs)
 

@@ -35,11 +35,11 @@ This project leverages the **official Model Context Protocol C# SDK** from Anthr
 - ❌ Limited scalability
 
 **For production, replace with**:
-- ✅ **Redis** (recommended) - Distributed cache, fast, scales horizontally, supports TTL and atomic GET+DEL
+- ✅ **Azure Table Storage** (included) - Both TokenStore and ClientStore support this
+- ✅ **Redis** (recommended for high-performance) - Distributed cache, fast, scales horizontally
 - ✅ **SQL Server** - Persistent, supports transactions and audit trail
-- ✅ **Azure Table Storage** - Cost-effective, serverless, globally distributed
 
-See [Persistent Token Storage](#persistent-token-storage-recommendations) below for details.
+See [Persistent Storage Recommendations](#persistent-token-storage-recommendations) below for details.
 
 ---
 
@@ -705,103 +705,75 @@ builder.Services.AddDataProtection()
 In-memory (ConcurrentDictionary):
     - PKCE State: 10 min TTL
     - Login Tokens: 5 min TTL
+
+Configurable Storage (InMemory or AzureTableStorage):
     - Authorization Codes: 5 min TTL
     - Access Tokens: 60 min TTL
-    - Client Registrations: 24 hour TTL
+    - Client Registrations: No TTL (persistent)
 ```
 
 ### Scaling Options
 
-**Single Instance (current)**:
-- `ConcurrentDictionary` (static in-process store)
-- Fast (sub-millisecond)
-- No external dependencies
+**Single Instance (current default)**:
+- `ConcurrentDictionary` for PKCE state and login tokens (in-process)
+- Configurable stores for tokens and clients (InMemory or AzureTableStorage)
+- Fast (sub-millisecond for in-memory)
+- No external dependencies (InMemory mode)
 
-**Multi-Instance (future)**:
-- Redis (distributed cache)
-- SQL Server (persistent)
-- Azure Table Storage (cheap)
+**Multi-Instance (production)**:
+- **Azure Table Storage** (included) - For tokens and clients
+- **Redis** (future) - Distributed cache for PKCE state and login tokens
+- **SQL Server** (future) - Persistent storage with audit trail
 
 ---
 
-## Persistent Token Storage Recommendations
+## Persistent Storage Recommendations
 
 ### Current Implementation
 
-The project includes **two token storage implementations**:
+The project includes **four storage implementations**:
 
-**1. InMemoryTokenStore (Default - Development)**
+**1. TokenStore - InMemoryTokenStore (Default - Development)**
 
-Uses a static `ConcurrentDictionary<string, TokenData>` for all token data:
+Uses a static `ConcurrentDictionary<string, TokenData>` for all token data.
 
-```csharp
-// Services/InMemoryTokenStore.cs
-public class InMemoryTokenStore : ITokenStore
-{
-    private static readonly ConcurrentDictionary<string, TokenData> _tokens = new();
+See full implementation: `MCP/Services/TokenStore/InMemoryTokenStore.cs`
 
-    public Task StoreCodeData(TokenData codeData)
-    {
-        codeData.Code = GenerateOpaqueToken();
-        _tokens[codeData.Code] = codeData;
-        return Task.CompletedTask;
-    }
+**2. TokenStore - AzureTableTokenStore (Production)**
 
-    public Task<TokenData?> GetAndConsumeCode(string code)
-    {
-        if (!_tokens.TryRemove(code, out var tokenData)) { return Task.FromResult<TokenData?>(null); }
-        if (tokenData.CreatedAt.AddDays(TOKEN_EXPIRATION_DAYS) < DateTime.UtcNow) { return Task.FromResult<TokenData?>(null); }
-        return Task.FromResult<TokenData?>(tokenData);
-    }
-}
-```
+Uses Azure Table Storage for persistent, scalable token storage. See implementation details in previous section.
 
-**Why this was chosen for the reference implementation**:
-- ✅ Zero external dependencies
-- ✅ Simple to understand and debug
-- ✅ Fast (sub-millisecond lookups)
-- ✅ Good for development and demos
+**3. ClientStore - InMemoryClientStore (Default - Development)**
 
-**Why you MUST replace this for production**:
-- ❌ **Data loss on restart** - All tokens invalidated when app restarts
-- ❌ **Single instance only** - Cannot scale to multiple servers
-- ❌ **No audit trail** - Cannot track token usage for security analysis
-- ❌ **Memory pressure** - Large token stores consume app memory
+Uses a static `ConcurrentDictionary<string, ClientMapping>` with **deterministic client IDs**.
 
-**2. AzureTableTokenStore (Production)**
+Key implementation details:
+- Uses SHA-256 hash of (clientName + redirectUris + scopes) for deterministic client ID
+- Same parameters = same client ID (idempotent)
 
-Uses Azure Table Storage for persistent, scalable token storage:
+See full implementation: `MCP/Services/ClientStore/InMemoryClientStore.cs`
 
-```csharp
-// Services/AzureTableTokenStore.cs
-public class AzureTableTokenStore : ITokenStore
-{
-    private readonly TableClient _tableClient;
-    
-    public AzureTableTokenStore(string connectionString, string tableName)
-    {
-        _tableClient = new TableClient(connectionString, tableName);
-        _tableClient.CreateIfNotExists();
-        
-        // Cleanup expired tokens on startup
-        CleanupExpiredTokens();
-    }
-    
-    public async Task StoreCodeData(TokenData codeData)
-    {
-        var entity = new TokenDataEntity
-        {
-            PartitionKey = "TokenCode",
-            RowKey = codeData.Code,
-            EntraRefreshToken = codeData.EntraRefreshToken,
-            UserClaimsJson = JsonSerializer.Serialize(codeData.UserClaims),
-            PkceStateJson = JsonSerializer.Serialize(codeData.PkceState),
-            ExpiresAt = DateTime.UtcNow.AddDays(90)
-        };
-        await _tableClient.UpsertEntityAsync(entity);
-    }
-}
-```
+**Why deterministic client IDs?**
+- ✅ Idempotent registration (same params = same ID)
+- ✅ Works well with Claude AI (auto-registers on each restart)
+- ❌ **Does NOT work with ChatGPT** (registers once, expects persistent ID)
+
+**4. ClientStore - AzureTableClientStore (Production)**
+
+Uses Azure Table Storage with **random GUIDs** for client IDs.
+
+Key implementation details:
+- Uses `Guid.NewGuid().ToString("N")` for client IDs (32 hex characters)
+- PartitionKey: "ClientRegistration" (single partition)
+- RowKey: proxyClientId
+
+See full implementation: `MCP/Services/ClientStore/AzureTableClientStore.cs`
+
+**Why random GUIDs in Azure Table?**
+- ✅ Persistent across application restarts
+- ✅ **Required for ChatGPT** compatibility
+- ✅ Simpler implementation (no hashing needed)
+- ✅ Better distribution in Azure Table Storage
 
 **Configuration in appsettings.json**:
 ```json
@@ -811,6 +783,13 @@ public class AzureTableTokenStore : ITokenStore
     "AzureTableStorage": {
       "ConnectionString": "DefaultEndpointsProtocol=https;AccountName=...;AccountKey=...;EndpointSuffix=core.windows.net",
       "TableName": "TokenMappings"
+    }
+  },
+  "ClientStore": {
+    "Provider": "AzureTableStorage",
+    "AzureTableStorage": {
+      "ConnectionString": "DefaultEndpointsProtocol=https;AccountName=...;AccountKey=...;EndpointSuffix=core.windows.net",
+      "TableName": "ClientRegistrations"
     }
   }
 }
@@ -938,7 +917,9 @@ The implementation handles:
 **Step 3**: For Redis/SQL alternatives (not included):
 
 ```csharp
-// In Program.cs - Azure Table (included):
+// In Program.cs - Azure Table (included for both stores):
+
+// TokenStore
 if (tokenStoreProvider == "AzureTableStorage")
 {
     var connectionString = builder.Configuration["TokenStore:AzureTableStorage:ConnectionString"]!;
@@ -950,9 +931,23 @@ else // InMemory (default)
     builder.Services.AddSingleton<ITokenStore, InMemoryTokenStore>();
 }
 
+// ClientStore
+if (clientStoreProvider == "AzureTableStorage")
+{
+    var connectionString = builder.Configuration["ClientStore:AzureTableStorage:ConnectionString"]!;
+    var tableName = builder.Configuration["ClientStore:AzureTableStorage:TableName"] ?? "ClientRegistrations";
+    builder.Services.AddSingleton<IClientStore>(new AzureTableClientStore(connectionString, tableName));
+}
+else // InMemory (default)
+{
+    builder.Services.AddSingleton<IClientStore, InMemoryClientStore>();
+}
+
 // For Redis/SQL (requires custom implementation):
 // builder.Services.AddSingleton<ITokenStore, RedisTokenStore>();
 // builder.Services.AddSingleton<ITokenStore, SqlTokenStore>();
+// builder.Services.AddSingleton<IClientStore, RedisClientStore>();
+// builder.Services.AddSingleton<IClientStore, SqlClientStore>();
 ```
 
 **Step 4**: Deploy and test

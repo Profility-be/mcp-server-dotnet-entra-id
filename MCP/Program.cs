@@ -6,6 +6,7 @@ using System.Security.Cryptography;
 using MCP.Services;
 using MCP.Services.Jwt;
 using Profility.MCP.Services.TokenStore;
+using Profility.MCP.Services.ClientStore;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -42,8 +43,22 @@ else // InMemory (default)
     builder.Services.AddSingleton<ITokenStore, InMemoryTokenStore>();
 }
 
+// Configure ClientStore based on appsettings
+var clientStoreProvider = builder.Configuration["ClientStore:Provider"] ?? "InMemory";
+if (clientStoreProvider.Equals("AzureTableStorage", StringComparison.OrdinalIgnoreCase))
+{
+    var connectionString = builder.Configuration["ClientStore:AzureTableStorage:ConnectionString"]
+        ?? throw new InvalidOperationException("ClientStore:AzureTableStorage:ConnectionString is required when using AzureTableStorage provider");
+    var tableName = builder.Configuration["ClientStore:AzureTableStorage:TableName"] ?? "ClientRegistrations";
+    
+    builder.Services.AddSingleton<Profility.MCP.Services.ClientStore.IClientStore>(sp => new AzureTableClientStore(connectionString, tableName));
+}
+else // InMemory (default)
+{
+    builder.Services.AddSingleton<Profility.MCP.Services.ClientStore.IClientStore, Profility.MCP.Services.ClientStore.InMemoryClientStore>();
+}
+
 builder.Services.AddSingleton<ILoginTokenStore, InMemoryLoginTokenStore>();
-builder.Services.AddSingleton<IClientStore, InMemoryClientStore>();
 builder.Services.AddSingleton<IJwtBuilder, JwtBuilder>();
 builder.Services.AddSingleton<IBrandingProvider, BrandingProvider>();
 
