@@ -678,3 +678,6 @@ MigrationBackup/
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
 /Profility Services/FunctionApp.Console/private.settings.json
+
+# Local MCP client configuration (personal dev tunnel URL, not for the repo)
+.mcp.json

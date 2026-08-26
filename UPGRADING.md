@@ -46,6 +46,14 @@ stops working in stateless mode. The replacement on `2026-07-28` is
 [MRTR](https://csharp.sdk.modelcontextprotocol.io/concepts/mrtr); until you migrate, use a stateful
 session mode.
 
+**Progress notifications are not affected.** It is easy to read the row above as "the server can
+never push anything", but that only covers server-*initiated* requests. A `notifications/progress`
+message belongs to a request that is already in flight and travels on that request's own SSE stream,
+so streaming intermediate updates out of a running tool works fine in stateless mode. Whether anyone
+*sees* them is another matter: neither Claude AI nor Claude Code renders them today, and a buffering
+reverse proxy (a Microsoft dev tunnel, for one) collapses the per-second frames into one delivery at
+the end regardless of what the server does.
+
 **Existing clients mostly keep working.** A down-level client that sends the classic `initialize`
 handshake is still answered correctly in stateless mode — it simply gets no session back. This was
 verified against protocol revision `2025-11-25`.
@@ -142,23 +150,36 @@ Migrate them when convenient.
 
 ---
 
-## Tool metadata and structured output
+## The example tool
 
-The example tool now declares annotations and returns a typed record instead of a formatted string:
+`WhoAmITool` still returns a formatted string. Structured output was tried and reverted: returning a
+typed record does make the SDK publish an `outputSchema` with per-property descriptions, but neither
+Claude AI nor Claude Code surfaces those to the model or the user today, so it was complexity with no
+payoff. The `[Description]` on the *method* does come through, and tool annotations
+(`Title`, `ReadOnly`, `Idempotent`, `OpenWorld`) are cheap, so those stayed. Revisit structured
+output when clients catch up.
 
-```csharp
-[McpServerTool(Title = "Who am I?", ReadOnly = true, Idempotent = true,
-               OpenWorld = false, UseStructuredContent = true)]
-```
+The one change worth carrying into your own tools: it reads the caller from
+`RequestContext<CallToolRequestParams>.User` instead of `IHttpContextAccessor`. See the section above
+for why.
 
-The annotations tell a client the tool is safe to call without a confirmation prompt. Returning a
-record makes the SDK publish an `outputSchema` and emit `structuredContent` alongside the text, so
-clients consume fields instead of parsing prose.
+**The claim dump is now filtered.** The old tool echoed back every claim in the token. It now emits
+only claims on an explicit allowlist, and reports the rest as a count. Two guards:
 
-If you had code reading the old emoji-formatted string, switch to the structured fields.
+1. the claim type must be in `AllowedClaims`;
+2. the value must be at most 256 characters, so nothing token-shaped slips through.
 
-Note a related 2.0 change: a **non-object** return value is now emitted directly as structured
-content (`72` rather than `{"result": 72}`).
+An allowlist is the important half of that choice: with a denylist, every claim that Entra ID or one
+of your own `IClaimProvider` implementations adds later would leak by default. If you add a claim you
+*do* want surfaced, add its type to `AllowedClaims` in `WhoAmITool`.
+
+Note that JwtBearer maps some inbound claims to the long `ClaimTypes` URI (`email`, `upn`,
+`given_name`, `family_name`, `oid`, `tid`) while others stay short (`name`, `scope`, `client_id`,
+`iss`, `aud`). The allowlist therefore carries both spellings; list both when you extend it, or your
+claim will be silently dropped.
+
+Note a related 2.0 change if you *do* return objects from a tool: a **non-object** return value is
+now emitted directly as structured content (`72` rather than `{"result": 72}`).
 
 ---
 

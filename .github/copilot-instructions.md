@@ -39,8 +39,15 @@ volgende patronen bij wijzigingen:
   `IHttpContextAccessor`. Die laatste is niet betrouwbaar in een stateful sessie.
 - **Streamable HTTP is stateless by default** (`MCP:SessionMode`). Ga er niet van uit dat `/sse`
   bestaat, en niet dat sampling/elicitation/roots beschikbaar zijn.
-- **Tools declareren annotaties** (`Title`, `ReadOnly`, `Idempotent`, `OpenWorld`) en retourneren een
-  getypeerd object zodat de SDK een `outputSchema` publiceert.
+- **Tools declareren annotaties** (`Title`, `ReadOnly`, `Idempotent`, `OpenWorld`). Die zijn goedkoop
+  en komen wel door.
+- **Houd voorbeeldtools simpel.** Structured output (een getypeerd record, `UseStructuredContent`)
+  is geprobeerd en teruggedraaid: de SDK publiceert dan wel een `outputSchema` met
+  veld-descriptions, maar noch Claude AI noch Claude Code doet er vandaag iets mee. Zelfde voor
+  `notifications/progress`: correct verstuurd, nergens weergegeven. Voeg zulke dingen niet toe
+  "omdat het kan" - alleen als een client ze aantoonbaar gebruikt.
+- **Wat het model ziet is `[Description]` op de methode, niet XML-docs.** `///`-commentaar komt niet
+  in het gepubliceerde schema terecht. Gebruik XML-docs voor ontwikkelaars.
 - **RFC 9728 protected resource metadata staat in `Program.cs`** (`McpAuthenticationOptions`), niet in
   `WellKnownController`. Alleen de authorization-server metadata (RFC 8414) is handgeschreven.
 - **Backwards compatibiliteit**: hernoem geen bestaande configuratiesleutels en wijzig geen
@@ -61,4 +68,4 @@ volgende patronen bij wijzigingen:
 ### MCP Tool Voorbeeld
 - **WhoAmITool.cs** - Demonstreert hoe user claims te lezen uit het JWT token
 - Wire name: `who_am_i` (lower snake_case van de methodenaam)
-- Toont: naam, email, UPN, Object ID, plus alle claims - als structured content
+- Toont: naam, email, UPN, Object ID en de allowlisted claims, als leesbare tekst

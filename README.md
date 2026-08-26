@@ -76,21 +76,31 @@ This project demonstrates how to bridge the authentication gap between Claude AI
 
 This project includes a complete MCP server implementation with:
 
-- **`who_am_i` Tool** - Returns the authenticated user as structured content, so the client gets
-  typed fields and a published `outputSchema` instead of prose to parse:
-  ```json
-  {
-    "authenticated": true,
-    "name": "John Doe",
-    "email": "john.doe@company.com",
-    "userId": "b9b8d416-d882-47f9-bb74-445d22ddd735",
-    "upn": "john.doe@company.com",
-    "claims": { "oid": ["b9b8d416-..."], "scope": ["openid profile email"] }
-  }
+- **`who_am_i` Tool** - Displays authenticated user information, deliberately kept as a small,
+  readable example:
   ```
-  It also demonstrates the current best practices for a tool: reading the caller from
-  `RequestContext<CallToolRequestParams>.User` rather than `IHttpContextAccessor`, and declaring
-  `ReadOnly` / `Idempotent` / `OpenWorld` annotations so clients know it is safe to call.
+  Authenticated via Entra ID OAuth.
+
+  Name:  John Doe
+  Email: john.doe@company.com
+  OID:   b9b8d416-d882-47f9-bb74-445d22ddd735
+  UPN:   john.doe@company.com
+  Token expires: 2026-08-26 16:25:03Z (789s left)
+
+  Claims (11 shown, 6 withheld):
+    ...
+  ```
+  It reads the caller from `RequestContext<CallToolRequestParams>.User` rather than
+  `IHttpContextAccessor`, which is correct in every session mode - in a stateful session the tool
+  runs after the originating HTTP request has already completed.
+
+- **Claim allowlisting** - The tool echoes back only claims on an explicit allowlist, never a
+  denylist. A denylist leaks every claim that Entra ID or your own `IClaimProvider` adds later; an
+  allowlist means new claims stay invisible until you opt them in. A 256-character value cap backs it
+  up so nothing token-shaped slips through, and withheld claims are reported as a count only. Note
+  that JwtBearer maps some claims to the long `ClaimTypes` URI (`email`, `upn`, `oid`, `tid`) and
+  leaves others short (`name`, `scope`, `iss`) - list both spellings when you extend the allowlist,
+  or your claim is silently dropped.
 
 - **OAuth Protected Endpoints** - All MCP endpoints require valid Bearer tokens
 - **Per-tool authorization** - `AddAuthorizationFilters()` honours `[Authorize]` on individual tools

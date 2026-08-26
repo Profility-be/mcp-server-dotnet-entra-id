@@ -198,6 +198,9 @@ builder.Services.AddMcpServer()
         }
     })
     .WithToolsFromAssembly()
+    // Audit trail for every tool call. Registered before the authorization filters on purpose, so
+    // this wraps them and a call that is rejected still leaves a record.
+    .WithRequestFilters(filters => filters.AddCallToolFilter(ToolAuditLog.Filter))
     // Honours [Authorize] and [AllowAnonymous] on tools, prompts and resources, and filters
     // tools/list per user. The SDK docs recommend always calling this with ASP.NET Core.
     .AddAuthorizationFilters();

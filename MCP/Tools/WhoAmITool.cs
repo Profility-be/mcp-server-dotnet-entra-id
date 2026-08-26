@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Security.Claims;
+using System.Text;
 using ModelContextProtocol;
 using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
@@ -13,64 +14,68 @@ namespace Profility.MCP.Internal.Tools;
 [McpServerToolType]
 public class WhoAmITool
 {
-    /// <summary>
-    /// The result of the WhoAmI tool. Returning a typed object instead of a formatted string
-    /// makes the SDK publish an outputSchema for the tool and emit structured content, so the
-    /// client can consume the fields directly instead of parsing prose.
-    /// </summary>
-    /// <param name="Authenticated">Whether the caller presented a valid token.</param>
-    /// <param name="Name">Display name from the token.</param>
-    /// <param name="Email">Email address from the token.</param>
-    /// <param name="UserId">Entra ID object identifier (oid) of the user.</param>
-    /// <param name="Upn">User principal name.</param>
-    /// <param name="Claims">Every claim present in the token, keyed by claim type.</param>
-    public record WhoAmIResult(
-        bool Authenticated,
-        string Name,
-        string Email,
-        string UserId,
-        string Upn,
-        IReadOnlyDictionary<string, string[]> Claims);
+    // Claims are filtered with an allowlist, not a denylist: whatever Entra ID or a custom
+    // IClaimProvider adds later stays hidden until someone opts it in here. Note that JwtBearer maps
+    // some claims to the long ClaimTypes URI and leaves others short, so both spellings are listed.
+    private static readonly HashSet<string> AllowedClaims = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "name", ClaimTypes.Name,
+        "email", ClaimTypes.Email,
+        "given_name", ClaimTypes.GivenName,
+        "family_name", ClaimTypes.Surname,
+        "upn", ClaimTypes.Upn,
+        "oid", "http://schemas.microsoft.com/identity/claims/objectidentifier",
+        "tid", "http://schemas.microsoft.com/identity/claims/tenantid",
+        "scope", "client_id", "jti", "iss", "aud",
+    };
 
-    // Note for anyone migrating from an earlier version of this template: this tool used to take
-    // an IHttpContextAccessor and read HttpContext.User. Prefer RequestContext<T>.User - it is
-    // transport-agnostic and correct in every session mode, whereas the HttpContext of the request
-    // that started a stateful session has already completed by the time a tool runs on it.
-    [McpServerTool(
-        Title = "Who am I?",
-        ReadOnly = true,
-        Idempotent = true,
-        OpenWorld = false,
-        UseStructuredContent = true)]
+    [McpServerTool(Title = "Who am I?", ReadOnly = true, Idempotent = true, OpenWorld = false)]
     // Keep this wording. The more literal description below reads as credential harvesting to
     // Claude's connector review and triggers a "Connector is not safe" error.
     [Description("Returns general session context for the authenticated account so the assistant knows which tenant it is operating under.")]
-    //[Description("Get information about the currently authenticated user (name, email, ID, etc.)")]
-    public WhoAmIResult WhoAmI(RequestContext<CallToolRequestParams> context)
+    public string WhoAmI(RequestContext<CallToolRequestParams> context)
     {
+        // Prefer RequestContext.User over IHttpContextAccessor: it is correct in every session mode,
+        // whereas in a stateful session the tool runs after the originating request has completed.
         var user = context.User;
         if (user?.Identity?.IsAuthenticated != true)
         {
             throw new McpException("No authenticated user found. OAuth authentication may have failed.");
         }
 
-        // Extract common Entra ID claims. Entra hands out both the short OIDC claim names and the
-        // long SOAP-era ClaimTypes URIs depending on the token, so check both.
-        string Claim(string primary, params string[] fallbacks) =>
-            user.FindFirst(primary)?.Value
-            ?? fallbacks.Select(type => user.FindFirst(type)?.Value).FirstOrDefault(value => value is not null)
+        // Entra hands out both the short OIDC claim names and the long ClaimTypes URIs depending on
+        // the token, so try each in turn.
+        string Claim(params string[] types) =>
+            types.Select(type => user.FindFirst(type)?.Value).FirstOrDefault(value => value is not null)
             ?? "Unknown";
 
-        var claims = user.Claims
-            .GroupBy(claim => claim.Type)
-            .ToDictionary(group => group.Key, group => group.Select(claim => claim.Value).ToArray());
+        var shown = user.Claims
+            .Where(claim => AllowedClaims.Contains(claim.Type) && claim.Value.Length <= 256)
+            .OrderBy(claim => claim.Type)
+            .ToList();
 
-        return new WhoAmIResult(
-            Authenticated: true,
-            Name: Claim(ClaimTypes.Name, "name", "preferred_username"),
-            Email: Claim(ClaimTypes.Email, "email", "preferred_username"),
-            UserId: Claim(ClaimTypes.NameIdentifier, "sub", "oid"),
-            Upn: Claim(ClaimTypes.Upn, "upn", "preferred_username"),
-            Claims: claims);
+        var result = new StringBuilder();
+        result.AppendLine("Authenticated via Entra ID OAuth.");
+        result.AppendLine();
+        result.AppendLine($"Name:  {Claim(ClaimTypes.Name, "name", "preferred_username")}");
+        result.AppendLine($"Email: {Claim(ClaimTypes.Email, "email", "preferred_username")}");
+        result.AppendLine($"OID:   {Claim(ClaimTypes.NameIdentifier, "sub", "oid")}");
+        result.AppendLine($"UPN:   {Claim(ClaimTypes.Upn, "upn", "preferred_username")}");
+
+        if (long.TryParse(user.FindFirst("exp")?.Value, out var expUnixSeconds))
+        {
+            var expiresAt = DateTimeOffset.FromUnixTimeSeconds(expUnixSeconds);
+            var secondsLeft = (long)Math.Max(0, (expiresAt - DateTimeOffset.UtcNow).TotalSeconds);
+            result.AppendLine($"Token expires: {expiresAt:u} ({secondsLeft}s left)");
+        }
+
+        result.AppendLine();
+        result.AppendLine($"Claims ({shown.Count} shown, {user.Claims.Count() - shown.Count} withheld):");
+        foreach (var claim in shown)
+        {
+            result.AppendLine($"  {claim.Type}: {claim.Value}");
+        }
+
+        return result.ToString();
     }
 }
