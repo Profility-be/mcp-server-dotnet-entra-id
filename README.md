@@ -1,6 +1,6 @@
-# MCP Server using .Net and Microsoft Entra ID
+# MCP Server in .NET with Microsoft Entra ID (Azure AD) Authentication
 
-A .NET boilerplate for building secure MCP servers integrated with Microsoft Entra ID.
+A .NET boilerplate for building secure MCP servers integrated with Microsoft Entra ID (Azure AD), for MCP clients like Claude AI and ChatGPT.
 
 This project provides a ready-to-use foundation for anyone who wants to quickly set up a Model Context Protocol (MCP) server that’s secured with Microsoft Entra ID (Azure AD).
 It includes all the core components needed to authenticate users from your organization, manage user identity securely, and expose MCP tools in a trusted enterprise environment.
@@ -9,7 +9,7 @@ Out of the box, it’s tested and compatible with Claude AI and ChatGPT, making 
 
 This project demonstrates how to bridge the authentication gap between MCP clients (Claude AI, ChatGPT) and Microsoft Entra ID, ensuring these systems can work together securely and seamlessly.
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](../LICENSE)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/Profility-be/mcp-server-dotnet-entra-id/blob/main/LICENSE)
 [![.NET](https://img.shields.io/badge/.NET-10.0-512BD4?logo=dotnet)](https://dotnet.microsoft.com/download)
 [![MCP SDK](https://img.shields.io/badge/MCP%20C%23%20SDK-2.2.0-blue)](https://github.com/modelcontextprotocol/csharp-sdk)
 
@@ -130,8 +130,8 @@ This project includes a complete MCP server implementation with:
 ### 1. Clone and Build
 
 ```powershell
-git clone <your-repo-url>
-cd MCP
+git clone https://github.com/Profility-be/mcp-server-dotnet-entra-id.git
+cd mcp-server-dotnet-entra-id
 dotnet build
 ```
 
@@ -482,7 +482,7 @@ See for more info README-Architecture.md
 - Verify admin consent was provided
 
 
-### ChatGTP Issue: `invalid_client` after restarting the MCP service
+### `invalid_client`: Client not found in ChatGPT after restarting the server
 When the MCP service is restarted, ChatGPT may display the following error during the OAuth flow:
 
 ```
@@ -517,7 +517,7 @@ Use a **persistent client store** instead of an in-memory store when testing wit
 
 This ensures the registered `client_id` survives application restarts and prevents the OAuth handshake from failing.
 
-### ChatGTP Issue: “Connector is not safe” error
+### “Connector is not safe”: ChatGPT connects but no tools appear
 **Problem description:**
 When connecting the custom MCP server in ChatGPT, the connection initially appeared successful.  
 The connector showed as **connected**, but **no tools were available**.  
@@ -589,11 +589,14 @@ This reference implementation uses **in-memory storage** by default for simplici
 
 ---
 
-## Documentation
+## Further reading
 
-- **[Architecture](README-Architecture.md)** - Technical details, OAuth flows, PKCE implementation
-- **[Upgrading](UPGRADING.md)** - Moving an existing clone to .NET 10 and MCP C# SDK 2.2.0: what
+- **[Architecture](README-Architecture.md)** — OAuth flows, PKCE implementation, technical details
+- **[Upgrading](UPGRADING.md)** — Moving an existing clone to .NET 10 and MCP C# SDK 2.2.0: what
   broke, how to restore the old transport behaviour, and what stayed the same
+- **Why we built this** — background on running MCP against Dynamics 365, Power Apps and Dataverse:
+  [profility.be](https://profility.be/artikels/ai-mcp-dynamics-365-power-platform-entra-id-template-profility)
+  *(in Dutch)*
 
 ---
 
@@ -604,7 +607,7 @@ Contributions are welcome! This project serves as a reference implementation for
 ### Areas for Improvement
 
 - Additional OAuth provider implementations (Google, Okta, etc.)
-- Additional tools like ChatGTP
+- Additional tools like ChatGPT
 - Redis/SQL token storage for production scale
 - Token refresh implementation
 - More sample MCP tools
@@ -629,7 +632,8 @@ MIT License - See LICENSE file for details
 
 ## Maintainers & Contributors
 
-- Ronny Vander Snickt — Profility (https://profility.be)
+- Ronny Van der Snickt — [Profility](https://profility.be), a Microsoft partner in Belgium building
+  on Dynamics 365, Power Platform and Dataverse.
 
 Interested in contributing? See the Contributing section above or open a pull request.
 
