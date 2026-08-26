@@ -24,6 +24,29 @@ Voor volledig begrip van dit project, lees de volgende documentatie:
    - Production deployment aanbevelingen
    - Database schema's voor persistente storage
 
+3. **[UPGRADING.md](../UPGRADING.md)** - Bevat:
+   - Migratie van .NET 8 + MCP C# SDK 0.4.0-preview.2 naar .NET 10 + SDK 2.2.0
+   - Welk gedrag wijzigde (tool naming, stateless transport, protected resource metadata)
+   - Hoe het oude gedrag terug aan te zetten via `MCP:SessionMode` / `MCP:EnableLegacySse`
+
+## Technische Uitgangspunten
+
+Dit project is een template: de code moet tonen hoe je het vandaag hoort te doen. Houd je aan de
+volgende patronen bij wijzigingen:
+
+- **Target framework**: `net10.0`. MCP C# SDK: `2.2.0` (stable, geen preview).
+- **Lees de gebruiker in een tool via `RequestContext<CallToolRequestParams>.User`**, niet via
+  `IHttpContextAccessor`. Die laatste is niet betrouwbaar in een stateful sessie.
+- **Streamable HTTP is stateless by default** (`MCP:SessionMode`). Ga er niet van uit dat `/sse`
+  bestaat, en niet dat sampling/elicitation/roots beschikbaar zijn.
+- **Tools declareren annotaties** (`Title`, `ReadOnly`, `Idempotent`, `OpenWorld`) en retourneren een
+  getypeerd object zodat de SDK een `outputSchema` publiceert.
+- **RFC 9728 protected resource metadata staat in `Program.cs`** (`McpAuthenticationOptions`), niet in
+  `WellKnownController`. Alleen de authorization-server metadata (RFC 8414) is handgeschreven.
+- **Backwards compatibiliteit**: hernoem geen bestaande configuratiesleutels en wijzig geen
+  signatures van `IClaimProvider`, `ITokenStore`, `ILoginTokenStore`, `IClientStore`, `IJwtBuilder`
+  of `IBrandingProvider` - clones hangen daaraan. Voeg toe in plaats van te herbenoemen, en
+  documenteer elke gedragswijziging in UPGRADING.md.
 
 ## Belangrijke Code Locaties
 
@@ -36,5 +59,6 @@ Voor volledig begrip van dit project, lees de volgende documentatie:
 - **POST /oauth/token** - Token exchange endpoint
 
 ### MCP Tool Voorbeeld
-- **WhoAmITool.cs** - Demonstreert hoe user claims te lezen uit JWT token
-- Toont: naam, email, UPN, Object ID, tenant ID
+- **WhoAmITool.cs** - Demonstreert hoe user claims te lezen uit het JWT token
+- Wire name: `who_am_i` (lower snake_case van de methodenaam)
+- Toont: naam, email, UPN, Object ID, plus alle claims - als structured content

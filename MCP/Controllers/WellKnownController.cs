@@ -18,45 +18,14 @@ public class WellKnownController : ControllerBase
         _logger = logger;
     }
 
-    /// <summary>
-    /// RFC 9728: OAuth 2.0 Protected Resource Metadata
-    /// This tells Claude that this MCP server requires OAuth authentication
-    /// and points to the authorization server.
-    /// </summary>
-    [HttpGet(".well-known/oauth-protected-resource")]
-    public IActionResult GetProtectedResourceMetadata()
-    {
-        var baseUrl = _configuration["MCP:ServerUrl"];
-        var clientId = _configuration["AzureAd:ClientId"];
-        
-        _logger.LogInformation("Protected resource metadata requested from {BaseUrl}", baseUrl);
-
-        var metadata = new
-        {
-            // The MCP server URL (this resource)
-            resource = baseUrl,
-            
-            // The authorization server (the OAuth proxy itself, not Entra ID)
-            authorization_servers = new[] { baseUrl },
-            
-            // Supported scopes
-            scopes_supported = new[] 
-            { 
-                $"api://{clientId}/MCP.Access",
-                "openid",
-                "profile",
-                "email"
-            },
-            
-            // How to send the bearer token
-            bearer_methods_supported = new[] { "header" },
-            
-            // Token types accepted
-            resource_documentation = $"{baseUrl}/docs"
-        };
-
-        return Ok(metadata);
-    }
+    // RFC 9728 Protected Resource Metadata (/.well-known/oauth-protected-resource) used to be
+    // hand-written here. The MCP SDK now serves it from the McpAuthenticationOptions.ResourceMetadata
+    // configured in Program.cs, and - crucially - also emits the matching
+    // 'WWW-Authenticate: Bearer resource_metadata="..."' header on a 401, which this controller
+    // never did. Keep the document in one place: configure it in Program.cs, not here.
+    //
+    // Only the authorization-server metadata below stays hand-written, because this proxy IS the
+    // authorization server and the SDK does not model that side.
 
     /// <summary>
     /// RFC 8414: OAuth 2.0 Authorization Server Metadata

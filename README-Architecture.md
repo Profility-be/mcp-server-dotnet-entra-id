@@ -22,6 +22,19 @@ This project leverages the **official Model Context Protocol C# SDK** from Anthr
 
 **GitHub**: https://github.com/modelcontextprotocol/csharp-sdk
 
+**Version**: `ModelContextProtocol.AspNetCore` **2.2.0** on `net10.0`. Two architectural consequences
+of the 2.x line are worth internalising before reading the rest of this document:
+
+- **The transport is Streamable HTTP, stateless by default.** Protocol revision `2026-07-28` removed
+  `Mcp-Session-Id` (SEP-2567), so the server keeps no state between requests. That is what allows
+  horizontal scale-out without session affinity, at the cost of server-to-client requests: sampling,
+  elicitation and roots are unavailable. The legacy `/sse` transport is not mapped unless explicitly
+  enabled. Configurable via `MCP:SessionMode` - see [UPGRADING.md](UPGRADING.md).
+- **The SDK owns the protected-resource half of discovery.** RFC 9728 metadata and the matching
+  `WWW-Authenticate` challenge come from `McpAuthenticationOptions` in `Program.cs`. Only the
+  authorization-server metadata (RFC 8414) is hand-written in `WellKnownController`, because this
+  proxy is itself the authorization server.
+
 ### Production Storage Warning
 
 ⚠️ **This implementation uses in-memory storage for simplicity**:
@@ -63,6 +76,12 @@ When Claude connects to an MCP server, it follows this discovery process:
 ```
 1. User configures MCP server URL in Claude
    └─> https://your-mcp-server.com/
+
+1b. Claude calls the MCP endpoint without a token and is challenged
+   └─> POST / → 401 Unauthorized
+   └─> WWW-Authenticate: Bearer resource_metadata="https://your-mcp-server.com/.well-known/oauth-protected-resource"
+   └─> This header (RFC 9728) is what points Claude at the metadata document instead of
+       having to guess the path. Emitted by the SDK's MCP authentication scheme.
 
 2. Claude fetches Protected Resource Metadata
    └─> GET /.well-known/oauth-protected-resource
