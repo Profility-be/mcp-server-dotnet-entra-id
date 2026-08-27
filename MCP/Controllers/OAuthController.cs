@@ -260,7 +260,7 @@ public class OAuthController : Controller
             var pkceState = _stateManager.DecryptAndRetrieveState(state);
             if (pkceState == null) { return BadRequest(new { error = "invalid_request", error_description = "Invalid or expired state" }); }
 
-            var tokenResponse = await CallEntraIdTokenEndpoint("authorization_code", pkceState, code: code);
+            var (tokenResponse, _) = await CallEntraIdTokenEndpoint("authorization_code", pkceState, code: code);
             if (tokenResponse == null) { return Redirect($"{pkceState.RedirectUri}?error=server_error&error_description=Token exchange failed&state={pkceState.OriginalState}"); }
 
             if (string.IsNullOrEmpty(tokenResponse.RefreshToken))
@@ -333,8 +333,22 @@ public class OAuthController : Controller
             
             if (request.GrantType == "refresh_token")
             {
-                var newTokens = await CallEntraIdTokenEndpoint("refresh_token", tokenData.PkceState, refreshToken: entraRefreshToken);
-                if (newTokens == null) { return BadRequest(new { error = "invalid_grant", error_description = "Failed to refresh tokens" }); }
+                var (newTokens, upstreamUnavailable) = await CallEntraIdTokenEndpoint("refresh_token", tokenData.PkceState, refreshToken: entraRefreshToken);
+                if (newTokens == null)
+                {
+                    // The code was consumed above, so returning here would destroy the client's only
+                    // refresh token over an outage we caused nothing of and force a full re-auth.
+                    // Put it back when Entra was simply unreachable; leave it consumed when Entra
+                    // actually rejected the grant, since then it is genuinely spent.
+                    if (upstreamUnavailable)
+                    {
+                        await _tokenStore.StoreCodeData(tokenData);
+                        _logger.LogWarning("Entra ID was unreachable on refresh; restored refresh code so the session survives the outage");
+                        return StatusCode(503, new { error = "temporarily_unavailable", error_description = "Identity provider is unreachable, retry shortly" });
+                    }
+
+                    return BadRequest(new { error = "invalid_grant", error_description = "Failed to refresh tokens" });
+                }
                 
                 if (!string.IsNullOrEmpty(newTokens.RefreshToken)) { entraRefreshToken = newTokens.RefreshToken; }
             }
@@ -371,7 +385,15 @@ public class OAuthController : Controller
         }
     }
 
-    private async Task<EntraTokenResponse?> CallEntraIdTokenEndpoint(string grantType, PkceStateData stateData, string? code = null, string? refreshToken = null)
+    /// <summary>
+    /// Calls the Entra ID token endpoint.
+    /// </summary>
+    /// <returns>
+    /// The tokens, plus whether the attempt failed because Entra ID could not be reached or answered
+    /// with a server error. A caller has to be able to tell "Entra rejected this token" from "Entra was
+    /// not reachable", because only the first means the token is actually dead.
+    /// </returns>
+    private async Task<(EntraTokenResponse? Tokens, bool UpstreamUnavailable)> CallEntraIdTokenEndpoint(string grantType, PkceStateData stateData, string? code = null, string? refreshToken = null)
     {
         try
         {
@@ -404,30 +426,34 @@ public class OAuthController : Controller
             if (!response.IsSuccessStatusCode)
             {
                 _logger.LogError("Entra ID token request failed: grant_type={GrantType}, status={StatusCode}", grantType, response.StatusCode);
-                return null;
+
+                // A 5xx or 429 is Entra having a bad moment; a 4xx is Entra telling us the grant is dead.
+                var upstreamUnavailable = (int)response.StatusCode >= 500 || (int)response.StatusCode == 429;
+                return (null, upstreamUnavailable);
             }
 
             var content = await response.Content.ReadAsStringAsync();
             var tokenResponse = JsonSerializer.Deserialize<EntraIdTokenResponse>(content, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
-            if (tokenResponse == null) { return null; }
+            if (tokenResponse == null) { return (null, false); }
             
             var userClaims = grantType == "authorization_code" 
                 ? (!string.IsNullOrEmpty(tokenResponse.IdToken) ? ExtractUserClaimsFromToken(tokenResponse.IdToken) : ExtractUserClaimsFromToken(tokenResponse.AccessToken))
                 : null;
 
-            return new EntraTokenResponse
+            return (new EntraTokenResponse
             {
                 AccessToken = tokenResponse.AccessToken,
                 IdToken = tokenResponse.IdToken,
                 RefreshToken = tokenResponse.RefreshToken,
                 ExpiresIn = tokenResponse.ExpiresIn,
                 UserClaims = userClaims
-            };
+            }, false);
         }
         catch (Exception ex)
         {
+            // Never reached Entra at all - a socket error, DNS, TLS or a timeout.
             _logger.LogError(ex, "Exception during Entra ID token request: grant_type={GrantType}", grantType);
-            return null;
+            return (null, true);
         }
     }
 
