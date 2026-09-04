@@ -15,7 +15,10 @@ public class InMemoryTokenStore : ITokenStore
 
     public Task StoreCodeData(TokenData codeData)
     {
-        codeData.CreatedAt = DateTime.UtcNow;
+        // Only stamp a code that does not already carry a creation time. A code restored after a failed
+        // refresh must keep its original window, otherwise a caller could hold one open indefinitely by
+        // failing on purpose. Both call sites that mint a new code set CreatedAt themselves.
+        if (codeData.CreatedAt == default) { codeData.CreatedAt = DateTime.UtcNow; }
         _tokens[codeData.Code] = codeData;
         return Task.CompletedTask;
     }
