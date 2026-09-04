@@ -64,17 +64,18 @@ public class OAuthController : Controller
         {
             if (request.RedirectUris == null || request.RedirectUris.Count == 0) { return BadRequest(new { error = "invalid_redirect_uri", error_description = "At least one redirect URI is required" }); }
 
-            // Validate redirect URIs: only HTTPS required, optional strict validation
+            // Validate redirect URIs: HTTPS, or HTTP on loopback (native clients), optional strict validation
             var validateRedirectUris = bool.TryParse(_configuration["OAuth:ValidateRedirectUris"], out var validate) && validate;
             foreach (var uriString in request.RedirectUris)
             {
-                if (!Uri.TryCreate(uriString, UriKind.Absolute, out var uri) || uri.Scheme != Uri.UriSchemeHttps)
+                if (!Uri.TryCreate(uriString, UriKind.Absolute, out var uri) || !IsAcceptableRedirectUri(uri))
                 {
-                    return BadRequest(new { error = "invalid_redirect_uri", error_description = $"Redirect URI must use HTTPS: {uriString}" });
+                    return BadRequest(new { error = "invalid_redirect_uri", error_description = $"Redirect URI must use HTTPS, or HTTP on a loopback address: {uriString}" });
                 }
-                
-                // Optional: strict validation can be enabled via OAuth:ValidateRedirectUris setting
-                if (validateRedirectUris)
+
+                // Optional: strict validation can be enabled via OAuth:ValidateRedirectUris setting.
+                // Loopback callbacks are exempt: native clients have no stable host to allowlist.
+                if (validateRedirectUris && !uri.IsLoopback)
                 {
                     var allowedHosts = new[] { "claude.ai", "chatgpt.com" };
                     if (!allowedHosts.Any(host => string.Equals(uri.Host, host, StringComparison.OrdinalIgnoreCase)))
@@ -130,6 +131,14 @@ public class OAuthController : Controller
 
             var clientMapping = await _clientStore.GetClientMapping(clientId);
             if (clientMapping == null) { return BadRequest(new { error = "invalid_client", error_description = "Client not found" }); }
+
+            // RFC 6749 3.1.2.3: never hand an authorization code to an unvalidated redirect URI.
+            // Report the mismatch here instead of redirecting to it.
+            if (!IsRegisteredRedirectUri(redirectUri, clientMapping.RedirectUris))
+            {
+                _logger.LogWarning("Authorization request with unregistered redirect URI {RedirectUri} for client {ClientId} ({ClientName})", redirectUri, clientId, clientMapping.ClientName);
+                return BadRequest(new { error = "invalid_request", error_description = "Redirect URI does not match a registered redirect URI" });
+            }
 
             // Generate proxy's own PKCE parameters for Entra ID
             var proxyCodeVerifier = _tokenGenerator.GenerateCodeVerifier();
@@ -369,6 +378,38 @@ public class OAuthController : Controller
             _logger.LogError(ex, "Error during token exchange");
             return StatusCode(500, new { error = "server_error", error_description = "Internal server error" });
         }
+    }
+
+    /// <summary>
+    /// A redirect URI is acceptable when it uses HTTPS, or HTTP on a loopback address.
+    /// RFC 8252 §7.3: native clients (Claude Code, the VS Code extension, MCP Inspector) receive
+    /// the authorization response on http://127.0.0.1:{port}/callback or its localhost equivalent,
+    /// on a port picked per attempt. Rejecting those blocks every native client at registration.
+    /// </summary>
+    private static bool IsAcceptableRedirectUri(Uri uri)
+        => uri.Scheme == Uri.UriSchemeHttps || (uri.Scheme == Uri.UriSchemeHttp && uri.IsLoopback);
+
+    /// <summary>
+    /// Checks the redirect URI of an authorization request against the ones the client registered.
+    /// Loopback URIs are matched on scheme and path only: the host (127.0.0.1 vs localhost) and the
+    /// ephemeral port legitimately differ between registration and authorization (RFC 8252 §7.3).
+    /// Every other URI must match exactly.
+    /// </summary>
+    private static bool IsRegisteredRedirectUri(string redirectUri, IEnumerable<string> registeredUris)
+    {
+        if (!Uri.TryCreate(redirectUri, UriKind.Absolute, out var requested)) { return false; }
+
+        foreach (var registered in registeredUris)
+        {
+            if (!Uri.TryCreate(registered, UriKind.Absolute, out var known)) { continue; }
+            if (known.Scheme != requested.Scheme) { continue; }
+            if (!string.Equals(known.AbsolutePath, requested.AbsolutePath, StringComparison.Ordinal)) { continue; }
+
+            if (requested.IsLoopback && known.IsLoopback) { return true; }
+            if (string.Equals(known.Host, requested.Host, StringComparison.OrdinalIgnoreCase) && known.Port == requested.Port) { return true; }
+        }
+
+        return false;
     }
 
     private async Task<EntraTokenResponse?> CallEntraIdTokenEndpoint(string grantType, PkceStateData stateData, string? code = null, string? refreshToken = null)
